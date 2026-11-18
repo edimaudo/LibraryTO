@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en" data-theme="light" data-scale="medium">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Explore Toronto Public Library branch information, annual activity and programs using public data.">
+  <meta name="theme-color" content="#f4f6f7">
+  <title>{{ title }} · LibraryTO</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to main content</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="/">LibraryTO</a>
+      <nav class="primary-nav">
+        <a href="/" class="nav-link {% if active == 'overview' %}active{% endif %}" {% if active == 'overview' %}aria-current="page"{% endif %}>Overview</a>
+        <a href="/branch-insights" class="nav-link {% if active == 'branches' %}active{% endif %}" {% if active == 'branches' %}aria-current="page"{% endif %}>Branch Insights</a>
+        <a href="/comparisons" class="nav-link {% if active == 'comparisons' %}active{% endif %}" {% if active == 'comparisons' %}aria-current="page"{% endif %}>Branch Comparisons</a>
+        <a href="/programs-events" class="nav-link {% if active == 'events' %}active{% endif %}" {% if active == 'events' %}aria-current="page"{% endif %}>Programs &amp; Events</a>
+      </nav>
+      <div class="sidebar-bottom">
+        <a class="nav-link secondary-link" href="/data-methodology" {% if active == 'methodology' %}aria-current="page"{% endif %}>Data &amp; Methodology</a>
+        <p class="sidebar-context">Toronto Public Library<br>Open-data intelligence</p>
+      </div>
+    </aside>
+
+    <div class="main-column">
+      <header class="topbar">
+        <a class="mobile-brand" href="/">LibraryTO</a>
+        <div class="global-search">
+          <label class="visually-hidden" for="global-search">Search branches and events</label>
+          <input id="global-search" type="search" placeholder="Search branches, services and events" autocomplete="off" aria-controls="search-results" aria-expanded="false">
+          <div id="search-results" class="search-results" role="listbox" hidden></div>
+        </div>
+        <div class="settings" aria-label="Display settings">
+          <button id="theme-toggle" class="text-button" type="button" aria-label="Switch to dark mode">Dark mode</button>
+          <label class="visually-hidden" for="font-scale">Font and interface size</label>
+          <select id="font-scale" aria-label="Font and interface size">
+            <option value="small">Small</option>
+            <option value="medium" selected>Medium</option>
+            <option value="large">Large</option>
+          </select>
+        </div>
+      </header>
+
+      <main id="main" class="content" data-page="{{ active }}">
+        <div class="page-heading">
+          <div>
+            <h1>{{ title }}</h1>
+            <p class="page-description" id="page-description"></p>
+          </div>
+          <span class="data-status" id="data-status">Source data</span>
+        </div>
+        <section id="page-content" aria-live="polite" aria-busy="true">
+          <p class="loading-line">Loading LibraryTO data…</p>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
+  <script src="{{ url_for('static', path='/js/app.js') }}" defer></script>
+</body>
+</html>
