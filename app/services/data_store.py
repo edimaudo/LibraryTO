@@ -1,4 +1,4 @@
-"""Read-only CSV loading, field normalization, and source-file diagnostics."""
+"""Cached, read-only CSV loading and normalization for LibraryTO."""
 from __future__ import annotations
 
 import csv
@@ -13,7 +13,7 @@ DATASETS: dict[str, dict[str, Any]] = {
     "branches": {
         "filename": "tpl-branch-general-information.csv",
         "label": "Branch general information",
-        "required": [("branchcode", "code"), ("branchname", "physicalbranch", "name")],
+        "required": [("branchcode", "code"), ("branchname", "name", "libraryname")],
     },
     "circulation": {
         "filename": "tpl-circulation-annual-by-branch.csv",
@@ -60,6 +60,7 @@ SERVICE_FIELDS = {
 }
 
 TRUE_VALUES = {"1", "true", "yes", "y", "t", "available", "offered"}
+FALSE_VALUES = {"0", "0.0", "false", "no", "n", "non-physical", "nonphysical", "virtual"}
 
 
 def normalize_key(value: Any) -> str:
@@ -89,6 +90,20 @@ def number(value: Any, default: float | None = None) -> float | None:
         return default
 
 
+def is_physical_branch(row: dict[str, Any]) -> bool:
+    """Reject rows explicitly marked PhysicalBranch=0 (or an equivalent false value)."""
+    value = field(row, "PhysicalBranch", default=None)
+    if value is None:
+        return True
+    normalized = str(value).strip().casefold()
+    if not normalized:
+        return True
+    if normalized in FALSE_VALUES:
+        return False
+    numeric = number(normalized)
+    return not (numeric == 0)
+
+
 def _read_csv(path: Path | None) -> list[dict[str, str]]:
     if path is None or not path.is_file():
         return []
@@ -107,23 +122,21 @@ def _read_csv(path: Path | None) -> list[dict[str, str]]:
 
 @lru_cache(maxsize=1)
 def load_all() -> dict[str, list[dict[str, str]]]:
-    return {
-        key: _read_csv(DATA_DIR / spec["filename"])
-        for key, spec in DATASETS.items()
-    }
-
-
-def refresh_data_cache() -> None:
-    load_all.cache_clear()
+    """Read each deployment snapshot once per application process."""
+    return {key: _read_csv(DATA_DIR / spec["filename"]) for key, spec in DATASETS.items()}
 
 
 def dataset_path(key: str) -> Path:
     return DATA_DIR / DATASETS[key]["filename"]
 
 
+@lru_cache(maxsize=1)
 def branch_records() -> list[dict[str, Any]]:
-    output: list[dict[str, Any]] = []
+    """Return unique physical branches only; these define the eligible branch set."""
+    by_code: dict[str, dict[str, Any]] = {}
     for row in load_all()["branches"]:
+        if not is_physical_branch(row):
+            continue
         code = str(field(row, "BranchCode", "Branch Code", "Code")).strip()
         if not code:
             continue
@@ -133,15 +146,11 @@ def branch_records() -> list[dict[str, Any]]:
             if raw_flag in TRUE_VALUES:
                 services.append(label)
         tier_raw = str(field(row, "ServiceTier", "Service Tier", "ServiceTierCode", "Tier")).strip()
-        tier_names = {
-            "DL": "District Library",
-            "NL": "Neighbourhood Library",
-            "RR": "Research & Reference Library",
-        }
+        tier_names = {"DL": "District Library", "NL": "Neighbourhood Library", "RR": "Research & Reference Library"}
         tier = tier_names.get(tier_raw.upper(), tier_raw)
-        output.append({
+        by_code[code.casefold()] = {
             "code": code,
-            "name": str(field(row, "BranchName", "Branch Name", "PhysicalBranch", "Name", default=code)).strip(),
+            "name": str(field(row, "BranchName", "Branch Name", "Name", "LibraryName", "LocationName", default=code)).strip(),
             "address": str(field(row, "Address", "StreetAddress", "AddressLine1")).strip(),
             "postal_code": str(field(row, "PostalCode", "Postal Code")).strip(),
             "service_tier": tier,
@@ -153,24 +162,37 @@ def branch_records() -> list[dict[str, Any]]:
             "website": str(field(row, "Website", "URL", "BranchWebsite")).strip(),
             "telephone": str(field(row, "Telephone", "Phone", "TelephoneNumber")).strip(),
             "services": services,
-        })
+        }
+    output = list(by_code.values())
     output.sort(key=lambda item: item["name"].casefold())
     return output
 
 
+@lru_cache(maxsize=1)
+def _eligible_branch_codes() -> frozenset[str]:
+    return frozenset(item["code"].casefold() for item in branch_records())
+
+
+@lru_cache(maxsize=5)
 def observations(metric: str | None = None) -> list[dict[str, Any]]:
+    """Return observations limited to physical branches in the branch directory."""
     rows: list[dict[str, Any]] = []
+    eligible = _eligible_branch_codes()
     for metric_key, aliases in METRIC_FIELDS.items():
         if metric and metric != metric_key:
             continue
-        for row in load_all()[metric_key if metric_key != "workstations" else "workstations"]:
+        for row in load_all()[metric_key]:
+            if not is_physical_branch(row):
+                continue
             code = str(field(row, "BranchCode", "Branch Code", "Code")).strip()
+            if not code or code.casefold() not in eligible:
+                continue
             year_value = field(row, "Year", "FiscalYear", "CalendarYear")
             year_text = str(year_value).strip()
             year_match = re.search(r"(?:19|20)\d{2}", year_text)
             year = year_match.group(0) if year_match else year_text
             value = number(field(row, *aliases))
-            if code and year and value is not None:
+            if year and value is not None:
                 rows.append({"branch_code": code, "year": year, "metric": metric_key, "value": value})
     return rows
 
@@ -179,17 +201,30 @@ def _truthy(row: dict[str, Any], *fields: str) -> bool:
     return str(field(row, *fields)).strip().lower() in TRUE_VALUES
 
 
+@lru_cache(maxsize=1)
 def event_records() -> list[dict[str, Any]]:
     output: list[dict[str, Any]] = []
+    eligible = _eligible_branch_codes()
     for index, row in enumerate(load_all()["events"]):
+        if not is_physical_branch(row):
+            continue
         title = str(field(row, "Title", "EventTitle", "EventName", "Name")).strip()
         if not title:
+            continue
+        branch_code = str(field(row, "BranchCode", "Branch Code")).strip()
+        if branch_code and branch_code.casefold() not in eligible:
             continue
         start = str(field(row, "StartDateLocal", "StartDateTime", "StartDate", "Date", "start")).strip()
         start_time = str(field(row, "StartTimeLocal", "StartTime", "Time")).strip()
         if start and start_time and "T" not in start and " " not in start:
             start = f"{start} {start_time}"
-        end = str(field(row, "EndDateLocal", "EndDateTime", "EndDate", "EndTime")).strip()
+        end = str(field(row, "EndDateLocal", "EndDateTime", "EndDate")).strip()
+        end_time = str(field(row, "EndTimeLocal", "EndTime")).strip()
+        if end and end_time and "T" not in end and " " not in end:
+            end = f"{end} {end_time}"
+        elif not end and end_time and start:
+            start_date_part = start[:10] if len(start) >= 10 else ""
+            end = f"{start_date_part} {end_time}".strip()
         registration_status = str(field(row, "RegistrationStatus", "RegistrationAvailability", "Registration")).strip()
         registration_open = _truthy(row, "RegistrationOpen", "IsRegistrationOpen", "RegistrationAvailable", "IsRegistrationAvailable") or registration_status.casefold() in {"open", "available", "registration open"}
         output.append({
@@ -198,7 +233,7 @@ def event_records() -> list[dict[str, Any]]:
             "start": start,
             "end": end,
             "location": str(field(row, "LocationName", "BranchName", "Location", "Venue")).strip(),
-            "branch_code": str(field(row, "BranchCode", "Branch Code")).strip(),
+            "branch_code": branch_code,
             "audiences": str(field(row, "Audiences", "Audience", "AgeGroup", "TargetAudience")).strip(),
             "languages": str(field(row, "Languages", "Language")).strip(),
             "types": str(field(row, "EventTypes", "EventType", "Type", "Category")).strip(),
@@ -214,27 +249,29 @@ def event_records() -> list[dict[str, Any]]:
     return output
 
 
-def _present_headers(key: str) -> set[str]:
+@lru_cache(maxsize=6)
+def _present_headers(key: str) -> frozenset[str]:
     rows = load_all()[key]
-    if not rows:
-        return set()
-    return {normalize_key(k) for k in rows[0].keys()}
+    return frozenset(normalize_key(k) for k in rows[0].keys()) if rows else frozenset()
 
 
+@lru_cache(maxsize=1)
 def dataset_status() -> dict[str, dict[str, Any]]:
     result: dict[str, dict[str, Any]] = {}
     for key, spec in DATASETS.items():
         path = dataset_path(key)
         rows = load_all()[key]
         headers = _present_headers(key)
-        missing = [
-            " or ".join(group)
-            for group in spec["required"]
-            if not any(alias in headers for alias in group)
-        ]
+        missing = [" or ".join(group) for group in spec["required"] if not any(normalize_key(alias) in headers for alias in group)]
         years: list[int] = []
         if key in {"circulation", "visits", "workstations", "registrations"}:
+            eligible = _eligible_branch_codes()
             for row in rows:
+                if not is_physical_branch(row):
+                    continue
+                row_code = str(field(row, "BranchCode", "Branch Code", "Code")).strip()
+                if not row_code or row_code.casefold() not in eligible:
+                    continue
                 raw_year = field(row, "Year", "FiscalYear", "CalendarYear")
                 match = re.search(r"(?:19|20)\d{2}", str(raw_year))
                 if match:
@@ -251,3 +288,22 @@ def dataset_status() -> dict[str, dict[str, Any]]:
             "size_bytes": path.stat().st_size if path.is_file() else 0,
         }
     return result
+
+
+def refresh_data_cache() -> None:
+    """Clear all file and derived-data caches after replacing source snapshots."""
+    dataset_status.cache_clear()
+    _present_headers.cache_clear()
+    event_records.cache_clear()
+    observations.cache_clear()
+    _eligible_branch_codes.cache_clear()
+    branch_records.cache_clear()
+    load_all.cache_clear()
+    try:
+        from app.services import analytics
+        for name in ("overview", "branch_detail", "branch_forecasts", "event_filter_options", "_compare_cached", "_recommend_events_cached"):
+            cache = getattr(analytics, name, None)
+            if cache is not None and hasattr(cache, "cache_clear"):
+                cache.cache_clear()
+    except ImportError:
+        pass

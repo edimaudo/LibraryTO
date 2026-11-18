@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from app.config import RELATE_FILE
+from app.services.data_store import branch_records, is_physical_branch
 
 STOP_WORDS = {
     "a", "about", "and", "are", "at", "be", "been", "branch", "branches",
@@ -134,6 +135,103 @@ def graph_status() -> dict[str, Any]:
     return status
 
 
+
+
+SUMMARY_PROPERTY_LABELS = {
+    "branchcode": "Branch code", "servicecode": "Service code",
+    "servicetier": "Service tier", "servicetiercode": "Service tier",
+    "address": "Address", "streetaddress": "Address", "postalcode": "Postal code",
+    "telephone": "Telephone", "phone": "Telephone",
+    "service": "Services", "services": "Services", "serviceoffering": "Service",
+    "audience": "Audience", "targetaudience": "Audience",
+    "language": "Language", "languages": "Languages",
+    "eventtype": "Program type", "type": "Type", "category": "Category",
+    "startdate": "Date", "startdatetime": "Date", "eventdate": "Date",
+    "registrationstatus": "Registration", "status": "Status",
+    "description": "About", "summary": "About",
+    "year": "Year", "metric": "Measure", "value": "Reported value",
+    "squarefootage": "Area (sq ft)", "workstations": "Workstations",
+}
+
+
+def _plain_value(value: Any, limit: int = 180) -> str:
+    safe = _json_safe(value)
+    if safe is None:
+        return ""
+    if isinstance(safe, list):
+        text = ", ".join(str(item) for item in safe if item is not None)
+    elif isinstance(safe, dict):
+        return ""
+    else:
+        text = str(safe)
+    text = re.sub(r"\s+", " ", text).strip()
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
+def _summary_category(labels: list[Any]) -> str:
+    joined = " ".join(str(label) for label in labels).casefold()
+    if "branch" in joined:
+        return "Branch"
+    if "event" in joined or "program" in joined:
+        return "Program"
+    if "service" in joined:
+        return "Service"
+    if "metric" in joined or "observation" in joined:
+        return "Activity record"
+    return "Related information"
+
+
+def _summary_highlights(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Turn matched graph nodes into compact, resident-facing result summaries."""
+    highlights: list[dict[str, Any]] = []
+    title_keys = ("name", "title", "branchname", "servicename", "eventtitle", "programname")
+    for item in items[:6]:
+        props = item.get("properties") or {}
+        normalized = {re.sub(r"[^a-z0-9]", "", str(key).casefold()): value for key, value in props.items()}
+        title = next((_plain_value(normalized[key], 110) for key in title_keys if normalized.get(key)), "")
+        category = _summary_category(item.get("labels") or [])
+        details: list[dict[str, str]] = []
+        for key, value in props.items():
+            normalized_key = re.sub(r"[^a-z0-9]", "", str(key).casefold())
+            label = SUMMARY_PROPERTY_LABELS.get(normalized_key)
+            if not label or normalized_key in title_keys:
+                continue
+            display = _plain_value(value)
+            if display and all(existing["label"] != label for existing in details):
+                details.append({"label": label, "value": display})
+            if len(details) >= 3:
+                break
+        for connection in item.get("connections", [])[:2]:
+            related = connection.get("related_properties") or {}
+            related_name = next((_plain_value(value, 110) for key, value in related.items() if re.sub(r"[^a-z0-9]", "", str(key).casefold()) in title_keys and value), "")
+            if related_name:
+                related_labels = connection.get("related_labels") or []
+                related_category = _summary_category(related_labels).lower()
+                label = "Related program" if related_category == "program" else "Related service" if related_category == "service" else "Related item"
+                if all(existing["value"] != related_name for existing in details):
+                    details.append({"label": label, "value": related_name})
+        if title or details:
+            highlights.append({"title": title or category, "category": category, "details": details[:4]})
+    return highlights
+
+
+def _eligible_graph_record(labels: Any, properties: Any, eligible_codes: set[str]) -> bool:
+    """Exclude non-physical graph records and branch references outside the physical directory."""
+    if not isinstance(properties, dict) or not is_physical_branch(properties):
+        return False
+    normalized = {re.sub(r"[^a-z0-9]", "", str(key).casefold()): value for key, value in properties.items()}
+    branch_code = next((str(normalized[key]).strip() for key in ("branchcode", "tplbranchcode") if normalized.get(key) not in (None, "")), "")
+    if branch_code and branch_code.casefold() not in eligible_codes:
+        return False
+    label_values = [labels] if isinstance(labels, str) else (labels or [])
+    label_text = " ".join(str(label) for label in label_values).casefold()
+    if "branch" in label_text and branch_code and branch_code.casefold() not in eligible_codes:
+        return False
+    return True
+
+
 def _terms(question: str, branch_code: str | None = None) -> list[str]:
     text = f"{question} {branch_code or ''}".casefold()
     tokens = [token for token in re.findall(r"[\w'-]+", text) if len(token) >= 2 and token not in STOP_WORDS]
@@ -192,6 +290,7 @@ def ask(question: str, branch_code: str | None = None) -> dict[str, Any]:
                     )
 
         evidence_by_node: dict[str, dict[str, Any]] = {}
+        eligible_codes = {item["code"].casefold() for item in branch_records()}
         for label in labels[:30]:
             properties = sorted(properties_by_label.get(label, set()))[:30]
             if not properties:
@@ -218,7 +317,7 @@ def ask(question: str, branch_code: str | None = None) -> dict[str, Any]:
             try:
                 for row in _fetchall(connection, statement, parameters):
                     props = _json_safe(row.get("properties") or {})
-                    if not isinstance(props, dict):
+                    if not _eligible_graph_record(row.get("labels") or [label], props, eligible_codes):
                         continue
                     matched = 0
                     searchable = " ".join(str(value) for value in props.values()).casefold()
@@ -238,10 +337,14 @@ def ask(question: str, branch_code: str | None = None) -> dict[str, Any]:
                     item["match_count"] = max(item["match_count"], matched)
                     relationship_type = row.get("relationship_type")
                     if relationship_type:
+                        related_labels = _json_safe(row.get("related_labels") or [])
+                        related_properties = _json_safe(row.get("related_properties") or {})
+                        if not _eligible_graph_record(related_labels, related_properties, eligible_codes):
+                            continue
                         connection_evidence = {
                             "relationship_type": str(relationship_type),
-                            "related_labels": _json_safe(row.get("related_labels") or []),
-                            "related_properties": _json_safe(row.get("related_properties") or {}),
+                            "related_labels": related_labels,
+                            "related_properties": related_properties,
                         }
                         connection_key = repr(connection_evidence)
                         if all(repr(existing) != connection_key for existing in item["connections"]):
@@ -257,26 +360,22 @@ def ask(question: str, branch_code: str | None = None) -> dict[str, Any]:
             reverse=True,
         )[:20]
 
+        highlights = _summary_highlights(deduplicated)
         if not deduplicated:
-            answer = "The graph did not return a node matching those terms. Try a branch name, branch code, service name, metric or event keyword."
+            answer = "I couldn't find a clear match. Try a branch name, service, metric or program title."
             status = "no_matches"
         else:
-            node_types = sorted({label for item in deduplicated for label in item["labels"]})
-            edge_count = sum(len(item.get("connections", [])) for item in deduplicated)
-            answer = (
-                f"Relate returned {len(deduplicated)} matching graph record(s) across "
-                f"{', '.join(node_types)}. {edge_count} returned record(s) include a connected relationship. "
-                "The evidence below shows the matching node properties and any connected node returned by the graph query."
-            )
+            titles = list(dict.fromkeys(item["title"] for item in highlights if item.get("title")))
+            if titles:
+                answer = "The closest matches are " + ", ".join(titles[:4]) + "."
+            else:
+                answer = "I found related branch information. The key details are listed below."
             status = "ok"
         return {
             "status": status,
             "answer": answer,
-            "search_terms": terms,
+            "highlights": highlights,
             "evidence": deduplicated,
-            "source": RELATE_FILE.name,
-            "retrieval_method": "Schema-aware, parameterized Cypher retrieval",
-            "notice": "This version retrieves and ranks graph evidence. It does not use a generative language model to infer facts or write arbitrary Cypher.",
         }
     except RelateUnavailable:
         raise

@@ -33,6 +33,7 @@ def test_single_root_fastapi_entrypoint():
     assert (project_root / "main.py").is_file()
     assert not (project_root / "app" / "main.py").exists()
     assert app.title == "LibraryTO"
+    assert not any(getattr(route, "path", "") == "/openapi.json" for route in app.routes)
 
 
 def test_no_route_contains_api_prefix():
@@ -69,7 +70,7 @@ def test_vercel_configuration_matches_project_specification():
     }
 
 
-def test_data_route_validation_errors_are_json():
-    response = client.get("/branches/BR001/forecasts?horizon=invalid")
-    assert response.status_code == 422
+def test_export_validation_errors_are_json():
+    response = client.get("/exports/observations.csv?metric=not-a-metric")
+    assert response.status_code == 400
     assert response.headers["content-type"].startswith("application/json")

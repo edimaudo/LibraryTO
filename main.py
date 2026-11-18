@@ -22,6 +22,7 @@ from app.services.analytics import (
     compare,
     overview,
     recommend_events,
+    event_filter_options,
 )
 from app.services.data_store import (
     branch_records,
@@ -34,9 +35,10 @@ from app.services.relate import RelateUnavailable, ask as relate_ask, graph_stat
 app = FastAPI(
     title="LibraryTO",
     version="1.0.0",
-    description="Open-data intelligence for Toronto Public Library services, activity and programs.",
+    description="Explore Toronto Public Library branch information, activity and programs.",
     docs_url=None,
     redoc_url=None,
+    openapi_url=None,
 )
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
@@ -58,9 +60,17 @@ def _page(request: Request, active: str, title: str):
 def _is_data_route(path: str) -> bool:
     """Return whether a route is intended to return structured data."""
     return (
-        path in {"/overview", "/branches", "/comparisons/data", "/search", "/ask", "/status", "/health"}
+        path in {"/overview", "/branches", "/comparisons/data", "/search", "/ask", "/status", "/health", "/events/options"}
         or path.startswith(("/branches/", "/events/recommendations", "/exports/"))
     )
+
+
+@app.middleware("http")
+async def read_cache_headers(request: Request, call_next):
+    response = await call_next(request)
+    if request.method == "GET" and _is_data_route(request.url.path) and response.status_code == 200:
+        response.headers.setdefault("Cache-Control", "public, max-age=300, stale-while-revalidate=600")
+    return response
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -112,11 +122,6 @@ async def events_page(request: Request):
     return _page(request, "events", "Programs & Events")
 
 
-@app.get("/data-methodology", response_class=HTMLResponse)
-async def methodology_page(request: Request):
-    return _page(request, "methodology", "Data & Methodology")
-
-
 @app.get("/overview")
 async def overview_data():
     return overview()
@@ -136,8 +141,8 @@ async def branch_profile(code: str):
 
 
 @app.get("/branches/{code}/forecasts")
-async def branch_forecast_data(code: str, horizon: int = Query(default=3, ge=1, le=5)):
-    result = branch_forecasts(code, horizon=horizon)
+async def branch_forecast_data(code: str):
+    result = branch_forecasts(code)
     if result is None:
         raise HTTPException(status_code=404, detail="Branch not found.")
     return result
@@ -149,6 +154,11 @@ async def comparison_data(branches: str = Query(default="", max_length=500)):
     return compare(codes)
 
 
+@app.get("/events/options")
+async def events_options():
+    return event_filter_options()
+
+
 @app.get("/events/recommendations")
 async def event_recommendations_data(
     interest: str = Query(default="", max_length=120),
@@ -156,13 +166,16 @@ async def event_recommendations_data(
     language: str = Query(default="", max_length=80),
     event_type: str = Query(default="", max_length=80),
     branch: str = Query(default="", max_length=120),
-    start_date: str = Query(default="", max_length=10),
-    end_date: str = Query(default="", max_length=10),
-    time_from: str = Query(default="", max_length=5),
-    time_to: str = Query(default="", max_length=5),
+    date: str = Query(default="", max_length=10),
+    start_time: str = Query(default="", max_length=5),
+    end_time: str = Query(default="", max_length=5),
     registration: str = Query(default="", max_length=20),
 ):
-    return recommend_events(locals())
+    return recommend_events({
+        "interest": interest, "audience": audience, "language": language,
+        "event_type": event_type, "branch": branch, "date": date,
+        "start_time": start_time, "end_time": end_time, "registration": registration,
+    })
 
 
 @app.get("/search")
@@ -268,10 +281,14 @@ async def export_compare(branches: str = Query(default="", max_length=500)):
 @app.get("/exports/events.csv")
 async def export_events(
     interest: str = "", audience: str = "", language: str = "", event_type: str = "",
-    branch: str = "", start_date: str = "", end_date: str = "", time_from: str = "",
-    time_to: str = "", registration: str = "",
+    branch: str = "", date: str = "", start_time: str = "", end_time: str = "",
+    registration: str = "",
 ):
-    result = recommend_events(locals())
+    result = recommend_events({
+        "interest": interest, "audience": audience, "language": language,
+        "event_type": event_type, "branch": branch, "date": date,
+        "start_time": start_time, "end_time": end_time, "registration": registration,
+    })
     event_rows = result["events"]
     rows = [[
         item["id"], item["title"], item["start"], item["end"], item["location"], item["branch_code"],
@@ -280,7 +297,7 @@ async def export_events(
     ] for item in event_rows]
     return _csv_response(
         "libraryto-programs-and-events.csv",
-        ["event_id", "title", "start", "end", "location", "branch_code", "audiences", "languages", "event_types", "registration_status", "match_reasons", "event_url", "registration_url"],
+        ["event_id", "title", "start", "end", "location", "branch_code", "audiences", "languages", "event_types", "registration_status", "matched_preferences", "event_url", "registration_url"],
         rows,
     )
 
