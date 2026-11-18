@@ -55,9 +55,17 @@ def _page(request: Request, active: str, title: str):
     )
 
 
+def _is_data_route(path: str) -> bool:
+    """Return whether a route is intended to return structured data."""
+    return (
+        path in {"/overview", "/branches", "/comparisons/data", "/search", "/ask", "/status", "/health"}
+        or path.startswith(("/branches/", "/events/recommendations", "/exports/"))
+    )
+
+
 @app.exception_handler(StarletteHTTPException)
 async def handle_http_exception(request: Request, exc: StarletteHTTPException):
-    if request.url.path.startswith("/api/"):
+    if _is_data_route(request.url.path):
         return JSONResponse(
             {"error": exc.detail},
             status_code=exc.status_code,
@@ -77,7 +85,7 @@ async def handle_http_exception(request: Request, exc: StarletteHTTPException):
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError):
-    if request.url.path.startswith("/api/"):
+    if _is_data_route(request.url.path):
         return JSONResponse({"error": "The request contains invalid values."}, status_code=422)
     return templates.TemplateResponse(
         request, "error.html", {"title": "Invalid request", "status_code": 422}, status_code=422
@@ -109,40 +117,40 @@ async def methodology_page(request: Request):
     return _page(request, "methodology", "Data & Methodology")
 
 
-@app.get("/api/overview")
-async def api_overview():
+@app.get("/overview")
+async def overview_data():
     return overview()
 
 
-@app.get("/api/branches")
-async def api_branches():
+@app.get("/branches")
+async def list_branches():
     return branch_records()
 
 
-@app.get("/api/branches/{code}")
-async def api_branch(code: str):
+@app.get("/branches/{code}")
+async def branch_profile(code: str):
     result = branch_detail(code)
     if result is None:
         raise HTTPException(status_code=404, detail="Branch not found.")
     return result
 
 
-@app.get("/api/branches/{code}/forecasts")
-async def api_branch_forecasts(code: str, horizon: int = Query(default=3, ge=1, le=5)):
+@app.get("/branches/{code}/forecasts")
+async def branch_forecast_data(code: str, horizon: int = Query(default=3, ge=1, le=5)):
     result = branch_forecasts(code, horizon=horizon)
     if result is None:
         raise HTTPException(status_code=404, detail="Branch not found.")
     return result
 
 
-@app.get("/api/compare")
-async def api_compare(branches: str = Query(default="", max_length=500)):
+@app.get("/comparisons/data")
+async def comparison_data(branches: str = Query(default="", max_length=500)):
     codes = [item.strip() for item in branches.split(",") if item.strip()][:6]
     return compare(codes)
 
 
-@app.get("/api/events/recommendations")
-async def api_event_recommendations(
+@app.get("/events/recommendations")
+async def event_recommendations_data(
     interest: str = Query(default="", max_length=120),
     audience: str = Query(default="", max_length=80),
     language: str = Query(default="", max_length=80),
@@ -157,8 +165,8 @@ async def api_event_recommendations(
     return recommend_events(locals())
 
 
-@app.get("/api/search")
-async def api_search(q: str = Query(default="", max_length=100)):
+@app.get("/search")
+async def search_records(q: str = Query(default="", max_length=100)):
     term = q.strip().casefold()
     if len(term) < 2:
         return {"branches": [], "events": []}
@@ -184,16 +192,16 @@ async def api_search(q: str = Query(default="", max_length=100)):
     return {"branches": branches, "events": events}
 
 
-@app.post("/api/ask")
-def api_ask(payload: AskRequest):
+@app.post("/ask")
+def branch_question(payload: AskRequest):
     try:
         return relate_ask(payload.question.strip(), payload.branch_code)
     except RelateUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@app.get("/api/system/status")
-def system_status():
+@app.get("/status")
+def application_status():
     return {
         "app": "LibraryTO",
         "data_directory": DATA_DIR.name,
@@ -215,7 +223,7 @@ def _csv_response(filename: str, headers: list[str], rows: list[list[Any]]) -> R
     )
 
 
-@app.get("/api/export/observations.csv")
+@app.get("/exports/observations.csv")
 async def export_observations(
     metric: str = Query(default="", max_length=30),
     branch_code: str = Query(default="", max_length=40),
@@ -230,7 +238,7 @@ async def export_observations(
     return _csv_response("libraryto-annual-observations.csv", ["branch_code", "metric_key", "metric", "year", "value"], rows)
 
 
-@app.get("/api/export/branches.csv")
+@app.get("/exports/branches.csv")
 async def export_branches():
     rows = []
     for item in branch_records():
@@ -246,7 +254,7 @@ async def export_branches():
     )
 
 
-@app.get("/api/export/compare.csv")
+@app.get("/exports/comparisons.csv")
 async def export_compare(branches: str = Query(default="", max_length=500)):
     result = compare([item.strip() for item in branches.split(",") if item.strip()][:6])
     headers = ["metric", "year", *[item["code"] for item in result["branches"]]]
@@ -257,7 +265,7 @@ async def export_compare(branches: str = Query(default="", max_length=500)):
     return _csv_response("libraryto-branch-comparison.csv", headers, rows)
 
 
-@app.get("/api/export/events.csv")
+@app.get("/exports/events.csv")
 async def export_events(
     interest: str = "", audience: str = "", language: str = "", event_type: str = "",
     branch: str = "", start_date: str = "", end_date: str = "", time_from: str = "",

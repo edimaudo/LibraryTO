@@ -48,7 +48,7 @@ themeToggle.addEventListener('click', () => setTheme(document.documentElement.da
 scaleSelect.addEventListener('change', (event) => setScale(event.target.value));
 
 async function getJson(url, options = {}) {
-  const response = await fetch(url, options);
+  const response = await fetch(url, { ...options, headers: { Accept: 'application/json', ...(options.headers || {}) } });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(payload.detail || payload.error || `Request failed (${response.status})`);
   return payload;
@@ -193,14 +193,14 @@ document.addEventListener('click', (event) => {
 });
 
 async function loadDataStatus() {
-  const status = await getJson('/api/system/status');
+  const status = await getJson('/status');
   const loaded = Object.values(status.datasets).filter((dataset) => dataset.loaded).length;
   $('#data-status').textContent = `${loaded} of 6 datasets loaded`;
   return status;
 }
 
 async function renderOverview() {
-  const [data, status] = await Promise.all([getJson('/api/overview'), loadDataStatus()]);
+  const [data, status] = await Promise.all([getJson('/overview'), loadDataStatus()]);
   const stats = [
     ['Circulation', data.totals.circulation, data.latest_years.circulation, data.coverage.circulation],
     ['Visits', data.totals.visits, data.latest_years.visits, data.coverage.visits],
@@ -228,7 +228,7 @@ async function renderOverview() {
 
   pageContent.innerHTML = `${dataNotice}${eventNotice}
     <section class="stat-grid" aria-label="Network summary">${statHtml}</section>
-    <section class="section"><div class="toolbar toolbar-spread"><h2 class="section-heading">Network activity over time</h2>${csvExportButton('/api/export/observations.csv')}</div>
+    <section class="section"><div class="toolbar toolbar-spread"><h2 class="section-heading">Network activity over time</h2>${csvExportButton('/exports/observations.csv')}</div>
       <div class="grid grid-2">${metricPanels}</div>
       <p class="small-text">Each headline total uses that metric’s latest available reporting year. Coverage counts show how many branch codes have an observation for that year. Reporting periods can differ by metric.</p>
     </section>
@@ -252,7 +252,7 @@ async function initMap() {
   const element = $('#branch-map');
   if (!element) return;
   try {
-    const branches = await getJson('/api/branches');
+    const branches = await getJson('/branches');
     const points = branches.filter((branch) => Number.isFinite(branch.lat) && Number.isFinite(branch.lon));
     $('#branch-map-list').innerHTML = branches.map((branch) => `<a href="/branch-insights?branch=${encodeURIComponent(branch.code)}">${esc(branch.name)}</a>`).join('');
     if (!window.L) {
@@ -313,7 +313,7 @@ function renderEvidence(evidence) {
 }
 
 async function renderBranches() {
-  const branches = await getJson('/api/branches');
+  const branches = await getJson('/branches');
   if (!branches.length) {
     pageContent.innerHTML = empty('The branch directory is not loaded. Add tpl-branch-general-information.csv to data/ and redeploy.');
     return;
@@ -358,9 +358,9 @@ async function renderBranches() {
     detail.innerHTML = '<p class="loading-line">Loading branch information…</p>';
     try {
       const [data, forecasts, status] = await Promise.all([
-        getJson(`/api/branches/${encodeURIComponent(code)}`),
-        getJson(`/api/branches/${encodeURIComponent(code)}/forecasts`),
-        getJson('/api/system/status')
+        getJson(`/branches/${encodeURIComponent(code)}`),
+        getJson(`/branches/${encodeURIComponent(code)}/forecasts`),
+        getJson('/status')
       ]);
       const branch = data.branch;
       const services = branch.services?.length
@@ -399,7 +399,7 @@ async function renderBranches() {
         button.disabled = true;
         answerArea.innerHTML = '<p class="small-text">Searching the Relate graph…</p>';
         try {
-          const answer = await getJson('/api/ask', {
+          const answer = await getJson('/ask', {
             method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ question: input.value.trim(), branch_code: code })
           });
@@ -415,7 +415,7 @@ async function renderBranches() {
 }
 
 async function renderComparisons() {
-  const branches = await getJson('/api/branches');
+  const branches = await getJson('/branches');
   if (branches.length < 2) {
     pageContent.innerHTML = empty('At least two branch records are required for a branch comparison.');
     return;
@@ -446,7 +446,7 @@ async function renderComparisons() {
     history.replaceState({}, '', nextUrl);
     resultHost.innerHTML = '<p class="loading-line">Preparing comparison…</p>';
     try {
-      const data = await getJson(`/api/compare?branches=${encodeURIComponent(codes.join(','))}`);
+      const data = await getJson(`/comparisons/data?branches=${encodeURIComponent(codes.join(','))}`);
       if (data.branches.length < 2) { resultHost.innerHTML = empty('Two or more valid branch records are required.'); return; }
       const yearFrom = Number($('#year-from').value) || -Infinity;
       const yearTo = Number($('#year-to').value) || Infinity;
@@ -457,7 +457,7 @@ async function renderComparisons() {
         return `<section class="section"><h3 class="section-heading">${esc(data.metric_labels[metric])}</h3>${multiLineChart(filtered, data.branches, data.metric_labels[metric])}${renderTable(['Year', ...data.branches.map((branch) => branch.name)], rows)}</section>`;
       }).join('');
       resultHost.innerHTML = `
-        <div class="toolbar toolbar-spread"><h2 class="section-heading">Branch characteristics</h2>${csvExportButton(`/api/export/compare.csv?branches=${encodeURIComponent(codes.join(','))}`)}</div>
+        <div class="toolbar toolbar-spread"><h2 class="section-heading">Branch characteristics</h2>${csvExportButton(`/exports/comparisons.csv?branches=${encodeURIComponent(codes.join(','))}`)}</div>
         ${renderTable(['Branch', 'Code', 'Service tier', 'Square footage', 'Workstations'], characteristics)}
         <p class="small-text">Branch attributes are shown as supplied in the directory. Square footage is not a measure of full service capacity. No population or neighbourhood coverage assumptions are used.</p>
         ${metricSections}
@@ -481,7 +481,7 @@ function eventItem(event) {
   </article>`;
 }
 async function renderEvents() {
-  const branches = await getJson('/api/branches');
+  const branches = await getJson('/branches');
   const params = new URLSearchParams(location.search);
   const now = new Date();
   const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
@@ -514,10 +514,10 @@ async function renderEvents() {
     }
     $('#event-results').innerHTML = '<p class="loading-line">Searching the event feed…</p>';
     try {
-      const data = await getJson(`/api/events/recommendations?${queryString}`);
+      const data = await getJson(`/events/recommendations?${queryString}`);
       $('#event-summary').textContent = `${fmt(data.total)} event record(s) match the selected period. Events are ordered by preference matches, then start date.`;
       $('#event-results').innerHTML = data.events.length ? data.events.map(eventItem).join('') : empty('No upcoming events match those filters. Try a wider date range or broader preferences.');
-      $('#event-export').innerHTML = csvExportButton(`/api/export/events.csv?${queryString}`);
+      $('#event-export').innerHTML = csvExportButton(`/exports/events.csv?${queryString}`);
     } catch (error) {
       $('#event-results').innerHTML = notice(error.message, 'error');
       $('#event-summary').textContent = 'The event feed could not be searched.';
@@ -603,7 +603,7 @@ searchInput.addEventListener('input', () => {
   }
   searchTimer = setTimeout(async () => {
     try {
-      const data = await getJson(`/api/search?q=${encodeURIComponent(query)}`);
+      const data = await getJson(`/search?q=${encodeURIComponent(query)}`);
       const items = [
         ...data.branches.map((branch) => ({ label: branch.name, sub: `Branch · ${branch.code}`, url: `/branch-insights?branch=${encodeURIComponent(branch.code)}` })),
         ...data.events.map((event) => ({ label: event.title, sub: `Event · ${event.location || 'Location not supplied'}`, url: `/programs-events?interest=${encodeURIComponent(query)}` }))

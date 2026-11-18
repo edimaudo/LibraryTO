@@ -68,17 +68,17 @@ def test_all_pages_render():
 
 
 def test_empty_state_overview_and_exact_expected_names():
-    response = client.get("/api/overview")
+    response = client.get("/overview")
     assert response.status_code == 200
     assert response.json()["branch_count"] == 0
-    status = client.get("/api/system/status").json()
+    status = client.get("/status").json()
     assert status["datasets"]["branches"]["filename"] == "tpl-branch-general-information.csv"
     assert status["datasets"]["events"]["filename"] == "tpl-events-feed.csv"
     assert status["relate"]["filename"] == "tpl_library_graph.rl"
 
 
 def test_overview_uses_latest_year_only(sample_data):
-    response = client.get("/api/overview")
+    response = client.get("/overview")
     data = response.json()
     assert data["latest_years"]["circulation"] == "2023"
     assert data["totals"]["circulation"] == 1900
@@ -87,19 +87,19 @@ def test_overview_uses_latest_year_only(sample_data):
 
 
 def test_branch_detail_and_forecast(sample_data):
-    detail = client.get("/api/branches/BR001")
+    detail = client.get("/branches/BR001")
     assert detail.status_code == 200
     payload = detail.json()
     assert payload["branch"]["name"] == "Maple Branch"
     assert payload["branch"]["services"] == ["KidsStop"]
-    forecasts = client.get("/api/branches/BR001/forecasts").json()
+    forecasts = client.get("/branches/BR001/forecasts").json()
     assert forecasts["circulation"]["available"] is True
     assert len(forecasts["circulation"]["forecasts"]) == 3
     assert forecasts["circulation"]["naive_baseline_mae"] is not None
 
 
 def test_comparison_returns_branch_year_values_without_rankings(sample_data):
-    response = client.get("/api/compare?branches=BR001,BR002")
+    response = client.get("/comparisons/data?branches=BR001,BR002")
     assert response.status_code == 200
     data = response.json()
     assert [branch["code"] for branch in data["branches"]] == ["BR001", "BR002"]
@@ -108,17 +108,17 @@ def test_comparison_returns_branch_year_values_without_rankings(sample_data):
 
 
 def test_event_recommendations_and_registration_filter(sample_data):
-    all_events = client.get("/api/events/recommendations?start_date=2099-01-01").json()
+    all_events = client.get("/events/recommendations?start_date=2099-01-01").json()
     assert all_events["total"] == 2
-    open_events = client.get("/api/events/recommendations?start_date=2099-01-01&registration=available").json()
+    open_events = client.get("/events/recommendations?start_date=2099-01-01&registration=available").json()
     assert [event["id"] for event in open_events["events"]] == ["EV001"]
     assert open_events["events"][0]["registration_status"] == "Registration open"
 
 
 def test_search_and_csv_export(sample_data):
-    search = client.get("/api/search?q=Maple").json()
+    search = client.get("/search?q=Maple").json()
     assert search["branches"][0]["code"] == "BR001"
-    export = client.get("/api/export/observations.csv?metric=visits")
+    export = client.get("/exports/observations.csv?metric=visits")
     assert export.status_code == 200
     assert export.headers["content-type"].startswith("text/csv")
     assert "branch_code" in export.text
@@ -126,10 +126,12 @@ def test_search_and_csv_export(sample_data):
 
 
 def test_missing_branch_and_graph_api_errors(sample_data, monkeypatch):
-    missing = client.get("/api/branches/DOES-NOT-EXIST")
+    missing = client.get("/branches/DOES-NOT-EXIST")
     assert missing.status_code == 404
+    assert missing.headers["content-type"].startswith("application/json")
+    assert missing.json()["error"] == "Branch not found."
     monkeypatch.setattr(relate_service, "RELATE_FILE", sample_data / "not-present.rl")
-    ask = client.post("/api/ask", json={"question": "What services are available?", "branch_code": "BR001"})
+    ask = client.post("/ask", json={"question": "What services are available?", "branch_code": "BR001"})
     assert ask.status_code == 503
     assert "not-present.rl" in ask.json()["error"]
 
@@ -195,11 +197,11 @@ def test_graph_adapter_uses_read_only_parameterized_schema_queries(tmp_path, mon
     assert all(connection.closed for connection in connections)
 
 
-def test_custom_404_page_and_json_api_404():
+def test_custom_404_page_and_unknown_route_is_html():
     page = client.get("/not-a-real-page")
     assert page.status_code == 404
     assert "Page not found" in page.text
     assert "Go to Overview" in page.text
-    api = client.get("/api/not-a-real-route")
-    assert api.status_code == 404
-    assert api.headers["content-type"].startswith("application/json")
+    missing = client.get("/not-a-real-route")
+    assert missing.status_code == 404
+    assert missing.headers["content-type"].startswith("text/html")

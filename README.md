@@ -87,6 +87,21 @@ CSV field matching is case-insensitive and normalizes spaces, underscores and pu
 
 CSV records are parsed once and cached in memory per running application process. On Vercel, the source files are bundled with the function. Replace the files and redeploy to refresh the deployment snapshot. The app does not depend on runtime writes for persistence.
 
+## Application URLs
+
+The application uses descriptive, resource-based paths. There is no `/api` prefix in any route.
+
+- Browser pages: `/`, `/branch-insights`, `/comparisons`, `/programs-events`, `/data-methodology`
+- Network overview data: `/overview`
+- Branch directory and profiles: `/branches`, `/branches/{code}`, `/branches/{code}/forecasts`
+- Branch comparison data: `/comparisons/data`
+- Event recommendations: `/events/recommendations`
+- Search and branch questions: `/search`, `/ask`
+- Application status: `/status`, `/health`
+- CSV downloads: `/exports/observations.csv`, `/exports/branches.csv`, `/exports/comparisons.csv`, `/exports/events.csv`
+
+These paths are consumed by the web interface. Structured responses remain JSON where needed, while the visible application pages are rendered as HTML.
+
 ## Application sections
 
 ### Overview
@@ -133,10 +148,10 @@ The interface uses Inter, responsive navigation, semantic page landmarks, keyboa
 4. Keep `main.py`, `vercel.json`, `requirements.txt`, `app/`, `templates/`, `static/` and `data/` at the project root as shown above.
 5. Deploy. Vercel builds the root `main.py` with `@vercel/python` and rewrites incoming application paths to that entry point. The `app/` directory contains service modules and configuration only; it does not contain a second FastAPI application.
 
-`vercel.json` explicitly includes `app/`, `templates/`, `static/` and `data/` in the Python function bundle. This is required because the app loads templates, static assets, CSV snapshots and the Relate graph at runtime.
+The `vercel.json` build configuration follows the project deployment specification: it builds the root `main.py` with `@vercel/python`, sets the requested 300-second duration and 1024 MB memory, and includes `data/**` in the function bundle.
 
 The Relate graph and CSVs are included as deployment files. The application opens the graph read-only. Do not rely on writing updates to the Vercel function filesystem.
 
 ## Known verification boundary
 
-The project workspace used to build this code did not contain the user's six CSV files or `tpl_library_graph.rl`. Tests therefore use representative CSV fixtures and a mocked Relate client. The actual field coverage, graph schema, graph query performance, forecast accuracy and event feed freshness must be validated after the real source assets are added.
+The project workspace used to build this code did not contain the six CSV files or `tpl_library_graph.rl`. Tests therefore use representative CSV fixtures and a mocked Relate client. The actual field coverage, graph schema, graph query performance, forecast accuracy and event feed freshness must be validated after the real source assets are added.
