@@ -1,6 +1,6 @@
 # LibraryTO
 
-LibraryTO is a responsive web application for exploring Toronto Public Library branch information, annual activity, reported services, connected branch information and upcoming programs. It is designed for residents and other non-technical users. It does not rank branches or label branches as overperforming or underperforming.
+LibraryTO is a responsive web application for exploring Toronto Public Library branch information, annual activity, reported services, connected branch information and upcoming programs. It is designed for residents and other non-technical users. It does not produce holistic branch performance ratings. It does include the requested metric-specific Top 10/Bottom 10 comparisons and a visitation-versus-square-footage quadrant analysis; these describe individual measures and relative branch size, not overall branch quality.
 
 ## Technology
 
@@ -98,7 +98,30 @@ The same eligible branch set is used for overview totals, annual trends, branch 
 - **Missing observations:** blank branch-year values remain missing. The app does not substitute zero for a missing observation.
 - **Comparisons:** compare selected branches over the reporting years supplied in the dataset. Missing years remain blank; no rankings or performance scores are calculated.
 - **Service tiers:** DL = District Library; NL = Neighbourhood Library; RR = Research & Reference Library.
-- **Branch characteristics:** address, postal code, service tier, square footage, workstation count and reported services are shown as supplied. Square footage is not treated as full service capacity.
+- **Branch characteristics:** address, postal code, library type, year opened, service tier, square footage, workstation count, website, telephone and reported services are shown when supplied. Square footage is not treated as full service capacity.
+
+### Overview analytics
+
+The Overview includes these descriptive analyses, using eligible physical branches only:
+
+- Four annual network trend charts: circulation, visitation, workstation usage and card registrations. Each chart has one metric title.
+- Network-versus-service-tier trends compare network totals with DL, NL and RR annual totals. The tier breakdown also reports the number of branches with a value for each metric-year. A simple count of branches by tier is not presented as an analytical view.
+- Eight metric-specific Top 10 and Bottom 10 charts, one pair for each annual metric. These are descriptive rankings for the selected reporting year, not overall branch ratings.
+- Metric distributions for the selected year, shown as box plots by service tier. The plots expose medians, quartiles and outliers; they do not imply that an outlier is inherently positive or negative.
+- Four annual metric-versus-square-footage scatter plots. X is square footage, Y is the selected annual metric, and colour indicates DL, NL or RR. Marker area is scaled to reported workstation count where available as a supplementary size variable; missing workstation counts use the minimum marker size.
+- A four-metric correlation matrix. Each metric pair uses only observations with the same BranchCode and Year, and the hover value reports the matched branch-year sample size. Correlation is descriptive and does not establish causation.
+- A visitation-versus-square-footage quadrant plot for the selected year. Median visitation and median square footage define the four relative groups. The labels describe visitation relative to branch area only; they are not holistic branch performance evaluations. The branch lists link to Branch Insights.
+- A Toronto branch metric map. The selected metric and reporting year colour branch points by the observed value. Marker size reflects square footage. This is a point-based metric map, not an interpolated geographic heat surface. Branch records without valid coordinates are not plotted.
+
+Metric values remain missing when no observation exists. They are not converted to zero for ranking, distribution, correlation, mapping or quadrant analysis.
+
+### Service offering analysis
+
+Reported branch service flags are normalized into branch service lists. Branch Insights displays a selected branch's reported services. Branch Comparisons presents a side-by-side matrix showing whether each selected service is reported for each selected branch. A service not recorded in the source is labelled as not listed; this does not prove that the branch does not offer it. The actual set of service fields must be checked against the supplied branch-information CSV.
+
+### Event discovery analysis
+
+The Programs & Events section summarizes the matching event-feed records by program type, audience, language and branch. Categorical selections for audience, language, program type and branch are filters. Interest remains a free-text relevance preference. Date, start time, end time and registration availability further constrain the result set. Counts and recommendations describe the feed snapshot only; they are not measures of attendance, popularity, demand or program effectiveness.
 
 ### Forecasts
 
@@ -124,16 +147,17 @@ The graph is not created, seeded, written, mutated or checkpointed by LibraryTO.
 
 - Each CSV is read once and cached in memory per application process.
 - Normalized branch records, observations, events, status information, overview calculations, branch histories, forecasts, event options, comparisons and event results are cached in-process.
-- The browser caches successful GET responses for five minutes. Read-only JSON responses also include short-lived HTTP cache headers.
+- The browser stores successful GET responses in session storage. Responses remain fresh for five minutes; for the following 25 minutes, a cached result is shown immediately while a refresh runs in the background. Cache keys include the application asset version and a revision derived from the source files' modification times and sizes, so a new application build or changed deployment snapshot invalidates old browser entries. Read-only JSON responses also include short-lived HTTP cache headers.
+- Plotly and Leaflet JavaScript are loaded when charts and maps approach the viewport rather than blocking the initial page render. The app sends one combined `/overview` request for the overview metrics and branch directory.
 - The data files are immutable deployment snapshots. To refresh data, replace the files in `data/` and redeploy. No runtime writes are required or treated as persistent storage.
 - Vercel functions may start more than one process or instance; process caches are local to each instance and are not a shared database cache.
 
 ## User experience and accessibility
 
 - Responsive layouts support desktop, tablet and mobile widths. Branch selection and comparison selection do not depend on desktop keyboard shortcuts.
-- Overview, branch history, forecasts and comparison charts use interactive Plotly charts with hover values, zoom/pan and image export. Each chart also has an optional data table.
-- Branch pins open detail popups. A collapsed table provides an alternative to the map.
-- Branch Insights uses keyboard-operable tabs and a searchable branch picker.
+- Overview, branch history, forecasts and comparison charts use interactive Plotly charts with hover values, zoom/pan and image export. Metric comparison tables are expandable and are shown once per metric. The Overview has no generic CSV export; downloads are available only where the dataset or applied filters are clear.
+- Branch pins open detail popups with the library name, type, year opened, location, workstation count, area, reported services, telephone and website where those values are supplied. The branch table focuses the corresponding map marker rather than navigating to Branch Insights.
+- Branch Insights uses a native branch dropdown and keyboard-operable tabs. Branch Comparisons supports up to five selected branches and uses tabs for annual metrics, branch information, services and locations. Each metric has one expandable annual data table.
 - Light and dark modes use the same control dimensions. Text and interface scaling supports Small (0.75×), Medium (1.0×) and Large (1.25×), with minimum target sizes retained.
 - The interface uses semantic landmarks, labels, visible keyboard focus, status announcements for dynamic results, reduced-motion support and dark-mode contrast adjustments.
 
@@ -189,7 +213,7 @@ Keep `main.py`, `vercel.json`, `requirements.txt`, `app/`, `templates/`, `static
 
 ## Scope exclusions
 
-LibraryTO does not use population datasets, neighbourhood polygons or neighbourhood service-coverage analysis. It does not evaluate branch performance, rank branches, infer unique visitors, or claim program effectiveness from event metadata.
+LibraryTO does not use population datasets, neighbourhood polygons or neighbourhood service-coverage analysis. It does not evaluate holistic branch performance or assign an overall branch rank. Metric-specific Top 10/Bottom 10 charts and visitation-versus-square-footage quadrants are descriptive analyses only. The app does not infer unique visitors or claim program effectiveness from event metadata.
 
 ## Verification boundary
 

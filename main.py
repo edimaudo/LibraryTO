@@ -29,6 +29,7 @@ from app.services.data_store import (
     dataset_status,
     event_records,
     observations,
+    data_revision,
 )
 from app.services.relate import RelateUnavailable, ask as relate_ask, graph_status
 
@@ -42,6 +43,7 @@ app = FastAPI(
 )
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
+STATIC_VERSION = "20261118-3"
 
 
 class AskRequest(BaseModel):
@@ -53,7 +55,7 @@ def _page(request: Request, active: str, title: str):
     return templates.TemplateResponse(
         request,
         "index.html",
-        {"active": active, "title": title},
+        {"active": active, "title": title, "data_revision": data_revision(), "static_version": STATIC_VERSION},
     )
 
 
@@ -68,8 +70,11 @@ def _is_data_route(path: str) -> bool:
 @app.middleware("http")
 async def read_cache_headers(request: Request, call_next):
     response = await call_next(request)
-    if request.method == "GET" and _is_data_route(request.url.path) and response.status_code == 200:
-        response.headers.setdefault("Cache-Control", "public, max-age=300, stale-while-revalidate=600")
+    if request.method == "GET" and response.status_code == 200:
+        if _is_data_route(request.url.path):
+            response.headers.setdefault("Cache-Control", "public, max-age=300, stale-while-revalidate=600")
+        elif request.url.path.startswith("/static/"):
+            response.headers.setdefault("Cache-Control", "public, max-age=31536000, immutable")
     return response
 
 
@@ -150,7 +155,7 @@ async def branch_forecast_data(code: str):
 
 @app.get("/comparisons/data")
 async def comparison_data(branches: str = Query(default="", max_length=500)):
-    codes = [item.strip() for item in branches.split(",") if item.strip()][:6]
+    codes = [item.strip() for item in branches.split(",") if item.strip()][:5]
     return compare(codes)
 
 
@@ -257,19 +262,20 @@ async def export_branches():
     for item in branch_records():
         rows.append([
             item["code"], item["name"], item["address"], item["postal_code"],
-            item["service_tier"], item["square_footage"], item["workstations"],
+            item["service_tier"], item.get("type_of_library", ""), item.get("year_opened", ""),
+            item["square_footage"], item["workstations"],
             item["lat"], item["lon"], "; ".join(item["services"]), item["website"], item["telephone"],
         ])
     return _csv_response(
         "libraryto-branches.csv",
-        ["branch_code", "branch_name", "address", "postal_code", "service_tier", "square_footage", "workstations", "latitude", "longitude", "services", "website", "telephone"],
+        ["branch_code", "branch_name", "address", "postal_code", "service_tier", "type_of_library", "year_opened", "square_footage", "workstations", "latitude", "longitude", "services", "website", "telephone"],
         rows,
     )
 
 
 @app.get("/exports/comparisons.csv")
 async def export_compare(branches: str = Query(default="", max_length=500)):
-    result = compare([item.strip() for item in branches.split(",") if item.strip()][:6])
+    result = compare([item.strip() for item in branches.split(",") if item.strip()][:5])
     headers = ["metric", "year", *[item["code"] for item in result["branches"]]]
     rows = []
     for metric, years in result["metrics"].items():

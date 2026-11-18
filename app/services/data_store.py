@@ -130,6 +130,20 @@ def dataset_path(key: str) -> Path:
     return DATA_DIR / DATASETS[key]["filename"]
 
 
+def data_revision() -> str:
+    """Return a cheap source-snapshot revision for browser cache invalidation."""
+    parts = []
+    source_paths = [DATA_DIR / "tpl_library_graph.rl"]
+    source_paths.extend(DATA_DIR / spec["filename"] for spec in DATASETS.values())
+    for path in source_paths:
+        try:
+            stat = path.stat()
+            parts.append(f"{path.name}:{stat.st_mtime_ns}:{stat.st_size}")
+        except OSError:
+            parts.append(f"{path.name}:missing")
+    return "|".join(parts)
+
+
 @lru_cache(maxsize=1)
 def branch_records() -> list[dict[str, Any]]:
     """Return unique physical branches only; these define the eligible branch set."""
@@ -151,7 +165,9 @@ def branch_records() -> list[dict[str, Any]]:
         by_code[code.casefold()] = {
             "code": code,
             "name": str(field(row, "BranchName", "Branch Name", "Name", "LibraryName", "LocationName", default=code)).strip(),
-            "address": str(field(row, "Address", "StreetAddress", "AddressLine1")).strip(),
+            "type_of_library": str(field(row, "TypeOfLibrary", "LibraryType", "BranchType", "Type", default=tier)).strip() or tier,
+            "year_opened": str(field(row, "YearOpened", "Year Opened", "OpeningYear", "OpenedYear", "DateOpened")).strip(),
+            "address": str(field(row, "Address", "StreetAddress", "AddressLine1", "Location")).strip(),
             "postal_code": str(field(row, "PostalCode", "Postal Code")).strip(),
             "service_tier": tier,
             "service_tier_code": tier_raw.upper(),
@@ -301,7 +317,7 @@ def refresh_data_cache() -> None:
     load_all.cache_clear()
     try:
         from app.services import analytics
-        for name in ("overview", "branch_detail", "branch_forecasts", "event_filter_options", "_compare_cached", "_recommend_events_cached"):
+        for name in ("overview", "branch_detail", "branch_forecasts", "event_filter_options", "event_discovery_analysis", "_compare_cached", "_recommend_events_cached"):
             cache = getattr(analytics, name, None)
             if cache is not None and hasattr(cache, "cache_clear"):
                 cache.cache_clear()

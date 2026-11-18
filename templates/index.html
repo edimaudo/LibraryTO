@@ -6,11 +6,9 @@
   <meta name="description" content="Explore Toronto Public Library branch information, annual activity and programs.">
   <meta name="theme-color" content="#f4f6f7">
   <title>{{ title }} · LibraryTO</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}">
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+  <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700&display=swap" data-inter-font onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700&display=swap"></noscript>
+  <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}?v={{ static_version }}">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to main content</a>
@@ -44,7 +42,7 @@
         </div>
       </header>
 
-      <main id="main" class="content" data-page="{{ active }}">
+      <main id="main" class="content" data-page="{{ active }}" data-cache-version="{{ static_version }}-{{ data_revision }}">
         <div class="page-heading">
           <div>
             <h1>{{ title }}</h1>
@@ -58,8 +56,6 @@
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="" defer></script>
-  <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" defer></script>
-  <script src="{{ url_for('static', path='/js/app.js') }}" defer></script>
+  <script src="{{ url_for('static', path='/js/app.js') }}?v={{ static_version }}" defer></script>
 </body>
 </html>

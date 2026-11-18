@@ -15,10 +15,10 @@ from app.services.data_store import branch_records, observations, event_records
 
 TORONTO_TZ = ZoneInfo("America/Toronto")
 METRICS = {
-    "circulation": "Circulation",
-    "visits": "Visits",
-    "workstations": "Workstation sessions",
-    "registrations": "Card registrations",
+    "circulation": "Annual Circulation",
+    "visits": "Annual Visitation",
+    "workstations": "Annual Workstation Usage",
+    "registrations": "Annual Card Registrations",
 }
 
 
@@ -35,26 +35,42 @@ def _year_key(value: str) -> tuple[int, str]:
 
 @lru_cache(maxsize=1)
 def overview() -> dict[str, Any]:
+    """Build one process-cached overview payload for all overview visualizations."""
     branches = branch_records()
+    branch_by_code = {branch["code"].casefold(): branch for branch in branches}
     all_observations = observations()
     trend_values: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     years_by_metric: dict[str, set[str]] = defaultdict(set)
     latest_totals: dict[str, float] = {}
     latest_years: dict[str, str] = {}
-
-    # Deduplicate branch/metric/year before aggregation.
     unique: dict[tuple[str, str, str], float] = {}
+    canonical_codes = {branch["code"].casefold(): branch["code"] for branch in branches}
     for item in all_observations:
-        unique[(item["metric"], item["year"], item["branch_code"])] = item["value"]
+        canonical_code = canonical_codes.get(item["branch_code"].casefold())
+        if canonical_code:
+            unique[(item["metric"], item["year"], canonical_code)] = item["value"]
     for (metric, year, code), value in unique.items():
         trend_values[metric][year] += value
         years_by_metric[metric].add(year)
 
     trend: dict[str, list[dict[str, Any]]] = {}
+    annual_values: dict[str, list[dict[str, Any]]] = {}
+    years: set[str] = set()
     for metric in METRICS:
         ordered_years = sorted(years_by_metric.get(metric, set()), key=_year_key)
+        years.update(ordered_years)
         trend[metric] = [
             {"year": year, "value": round(trend_values[metric][year], 2)}
+            for year in ordered_years
+        ]
+        annual_values[metric] = [
+            {
+                "year": year,
+                "values": {
+                    branch["code"]: unique.get((metric, year, branch["code"]))
+                    for branch in branches
+                },
+            }
             for year in ordered_years
         ]
         if ordered_years:
@@ -62,16 +78,41 @@ def overview() -> dict[str, Any]:
             latest_years[metric] = latest
             latest_totals[metric] = round(trend_values[metric][latest], 2)
 
-    tiers: dict[str, int] = defaultdict(int)
+    tier_counts: dict[str, int] = defaultdict(int)
     for branch in branches:
-        tiers[branch["service_tier"] or "Not specified"] += 1
+        tier_counts[branch["service_tier_code"] or "Other"] += 1
+
+    tier_trends: dict[str, dict[str, list[dict[str, Any]]]] = {}
+    for metric in METRICS:
+        metric_rows = []
+        for year_row in annual_values[metric]:
+            tier_totals: dict[str, float] = defaultdict(float)
+            tier_n: dict[str, int] = defaultdict(int)
+            for branch in branches:
+                value = year_row["values"].get(branch["code"])
+                if value is None:
+                    continue
+                tier = branch["service_tier_code"] or "Other"
+                tier_totals[tier] += value
+                tier_n[tier] += 1
+            metric_rows.append({
+                "year": year_row["year"],
+                "network": sum(value for value in year_row["values"].values() if value is not None),
+                "tiers": {tier: {"value": round(tier_totals[tier], 2), "n": tier_n[tier]} for tier in sorted(tier_totals)},
+            })
+        tier_trends[metric] = metric_rows
+
     return {
         "branch_count": len(branches),
         "totals": latest_totals,
         "latest_years": latest_years,
         "trend": trend,
-        "tiers": dict(sorted(tiers.items())),
+        "tiers": dict(sorted(tier_counts.items())),
         "metrics": METRICS,
+        "branches": branches,
+        "years": sorted(years, key=_year_key),
+        "annual_values": annual_values,
+        "tier_trends": tier_trends,
     }
 
 
@@ -147,7 +188,7 @@ def branch_detail(code: str) -> dict[str, Any] | None:
 
 
 def compare(codes: list[str]) -> dict[str, Any]:
-    clean_codes = tuple(dict.fromkeys(code.strip() for code in codes if code.strip()))[:6]
+    clean_codes = tuple(dict.fromkeys(code.strip() for code in codes if code.strip()))[:5]
     return _compare_cached(clean_codes)
 
 
@@ -197,7 +238,7 @@ def _parse_time(value: Any) -> time | None:
 
 
 @lru_cache(maxsize=1)
-def event_filter_options() -> dict[str, list[dict[str, str]] | list[str]]:
+def event_filter_options() -> dict[str, Any]:
     events = event_records()
     unique_values = lambda key: sorted({str(item.get(key) or "").strip() for item in events if str(item.get(key) or "").strip()}, key=str.casefold)
     branches = [{"code": item["code"], "name": item["name"]} for item in branch_records()]
@@ -206,6 +247,39 @@ def event_filter_options() -> dict[str, list[dict[str, str]] | list[str]]:
         "languages": unique_values("languages"),
         "event_types": unique_values("types"),
         "branches": branches,
+        "analysis": event_discovery_analysis(),
+    }
+
+
+def summarize_event_list(events: list[dict[str, Any]], branch_lookup: dict[str, str] | None = None) -> dict[str, Any]:
+    branch_lookup = branch_lookup or {item["code"].casefold(): item["name"] for item in branch_records()}
+    counts: dict[str, dict[str, int]] = {
+        "types": defaultdict(int), "audiences": defaultdict(int),
+        "languages": defaultdict(int), "branches": defaultdict(int),
+    }
+
+    def split_values(raw: Any) -> list[str]:
+        values = re.split(r"[;,|]+", str(raw or ""))
+        return list(dict.fromkeys(value.strip() for value in values if value.strip()))
+
+    for event in events:
+        for key in ("types", "audiences", "languages"):
+            for value in split_values(event.get(key)):
+                counts[key][value] += 1
+        code = str(event.get("branch_code") or "").casefold()
+        branch_label = branch_lookup.get(code) or str(event.get("location") or "Not specified").strip()
+        if branch_label:
+            counts["branches"][branch_label] += 1
+
+    def ordered(values: dict[str, int]) -> list[dict[str, Any]]:
+        return [{"label": label, "count": count} for label, count in sorted(values.items(), key=lambda item: (-item[1], item[0].casefold()))]
+
+    return {
+        "total_upcoming": len(events),
+        "types": ordered(counts["types"]),
+        "audiences": ordered(counts["audiences"]),
+        "languages": ordered(counts["languages"]),
+        "branches": ordered(counts["branches"]),
     }
 
 
@@ -254,17 +328,29 @@ def _recommend_events_cached(cache_key: tuple[tuple[str, str], ...]) -> dict[str
             ("language", event["languages"] or "", "Language"),
             ("event_type", event["types"] or "", "Type"),
         )
+        # Explicit categorical selections are filters, not ranking hints. Interests
+        # remain relevance signals because they are free-text and can match loosely.
+        matches_selected_categories = True
         for key, haystack, label in checks:
             target = requested[key]
-            if target and target in str(haystack).casefold():
+            if target:
+                if target not in str(haystack).casefold():
+                    matches_selected_categories = False
+                    break
                 score += 2
                 reasons.append(label)
+        if not matches_selected_categories:
+            continue
         if requested["branch"]:
             event_location = str(event.get("location") or "").casefold()
             event_code = str(event.get("branch_code") or "").casefold()
-            if requested["branch"] == event_code or (selected_branch_name and selected_branch_name in event_location):
-                score += 2
-                reasons.append("Branch")
+            branch_matches = requested["branch"] == event_code or (
+                bool(selected_branch_name) and selected_branch_name in event_location
+            )
+            if not branch_matches:
+                continue
+            score += 2
+            reasons.append("Branch")
         interest = requested["interest"]
         text_blob = " ".join((event["title"], event["description"], event["types"])).casefold()
         if interest:
@@ -285,7 +371,24 @@ def _recommend_events_cached(cache_key: tuple[tuple[str, str], ...]) -> dict[str
             "end_iso": event_end.isoformat() if event_end else None,
         })
     candidates.sort(key=lambda item: (-item["match_score"], item["start_iso"], item["title"].casefold()))
-    return {"events": candidates[:100], "total": len(candidates), "date": selected_date.isoformat() if selected_date else None}
+    return {
+        "events": candidates[:100],
+        "total": len(candidates),
+        "date": selected_date.isoformat() if selected_date else None,
+        "analysis": summarize_event_list(candidates, {key: value["name"] for key, value in branch_lookup.items()}),
+    }
+
+
+@lru_cache(maxsize=1)
+def event_discovery_analysis() -> dict[str, Any]:
+    """Descriptive upcoming-event breakdowns based only on fields in the event feed."""
+    today = _today()
+    upcoming = []
+    for event in event_records():
+        when = _event_datetime(event)
+        if when is not None and when.date() >= today:
+            upcoming.append(event)
+    return summarize_event_list(upcoming)
 
 
 @lru_cache(maxsize=100)

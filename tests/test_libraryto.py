@@ -26,10 +26,10 @@ def sample_data(tmp_path, monkeypatch):
     monkeypatch.setattr(data_store, "DATA_DIR", tmp_path)
     write_csv(
         tmp_path / "tpl-branch-general-information.csv",
-        ["BranchCode", "BranchName", "Address", "ServiceTier", "SquareFootage", "Workstations", "Latitude", "Longitude", "KidsStop", "LeadingReading"],
+        ["BranchCode", "BranchName", "Address", "ServiceTier", "BranchType", "YearOpened", "SquareFootage", "Workstations", "Latitude", "Longitude", "KidsStop", "LeadingReading"],
         [
-            ["BR001", "Maple Branch", "100 Main Street", "NL", 12000, 24, 43.70, -79.40, "Yes", "No"],
-            ["BR002", "River Branch", "200 River Road", "DL", 18000, 32, 43.72, -79.42, "No", "Yes"],
+            ["BR001", "Maple Branch", "100 Main Street", "NL", "Neighbourhood Library", 1998, 12000, 24, 43.70, -79.40, "Yes", "No"],
+            ["BR002", "River Branch", "200 River Road", "DL", "District Library", 1972, 18000, 32, 43.72, -79.42, "No", "Yes"],
         ],
     )
     metrics = {
@@ -65,7 +65,7 @@ def test_all_pages_render():
         assert response.status_code == 200
         assert "LibraryTO" in response.text
         assert "Inter" in response.text
-        assert "Plotly" not in response.text  # loaded from a pinned script asset
+        assert "plotly-2.35.2.min.js" not in response.text  # loaded on demand by the frontend
         assert "Data &amp; Methodology" not in response.text
     removed = client.get("/data-methodology")
     assert removed.status_code == 404
@@ -87,6 +87,51 @@ def test_overview_uses_latest_year_only(sample_data):
     assert data["latest_years"]["circulation"] == "2023"
     assert data["totals"]["circulation"] == 1900
     assert data["branch_count"] == 2
+
+
+def test_overview_includes_year_aligned_analytics_and_branch_map_data(sample_data):
+    payload = client.get("/overview").json()
+    assert {item["code"] for item in payload["branches"]} == {"BR001", "BR002"}
+    assert payload["branches"][0]["year_opened"] in {"1998", "1972"}
+    assert payload["annual_values"]["visits"][-1]["values"]["BR001"] == 550
+    assert set(payload["tier_trends"]["visits"][-1]["tiers"]) == {"DL", "NL"}
+
+
+def test_comparison_backend_caps_selection_at_five(monkeypatch):
+    from app.services import analytics
+    branches = [
+        {"code": f"BR{index:03d}", "name": f"Branch {index}", "service_tier": "NL", "service_tier_code": "NL", "services": []}
+        for index in range(1, 7)
+    ]
+    monkeypatch.setattr(analytics, "branch_records", lambda: branches)
+    monkeypatch.setattr(analytics, "observations", lambda: [])
+    analytics._compare_cached.cache_clear()
+    try:
+        result = analytics.compare([branch["code"] for branch in branches])
+        assert len(result["branches"]) == 5
+    finally:
+        analytics._compare_cached.cache_clear()
+
+
+def test_event_results_include_filtered_discovery_breakdowns(sample_data):
+    payload = client.get("/events/recommendations").json()
+    assert payload["analysis"]["total_upcoming"] == 2
+    assert {item["label"] for item in payload["analysis"]["types"]} == {"Workshop", "Reading"}
+    assert {item["label"] for item in payload["analysis"]["audiences"]} == {"Families", "Adults"}
+    filtered = client.get("/events/recommendations?audience=Families").json()
+    assert filtered["analysis"]["total_upcoming"] == 1
+    assert [item["label"] for item in filtered["analysis"]["audiences"]] == ["Families"]
+    by_type = client.get("/events/recommendations?event_type=Reading").json()
+    assert [event["id"] for event in by_type["events"]] == ["EV002"]
+    by_branch = client.get("/events/recommendations?branch=BR001").json()
+    assert [event["id"] for event in by_branch["events"]] == ["EV001"]
+
+
+def test_branch_map_metadata_is_normalized(sample_data):
+    branches = client.get("/branches").json()
+    maple = next(item for item in branches if item["code"] == "BR001")
+    assert maple["type_of_library"] == "Neighbourhood Library"
+    assert maple["year_opened"] == "1998"
 
 
 def test_branch_detail_and_forecast(sample_data):
@@ -250,6 +295,21 @@ def test_physical_branch_zero_is_excluded_from_all_metrics_and_branch_lists(tmp_
     data_store.refresh_data_cache()
 
 
+def test_data_revision_tracks_csv_graph_and_frontend_version(sample_data, monkeypatch):
+    from main import STATIC_VERSION
+    before = data_store.data_revision()
+    graph = sample_data / "tpl_library_graph.rl"
+    graph.write_bytes(b"updated graph snapshot")
+    after_graph = data_store.data_revision()
+    assert before != after_graph
+    csv_path = sample_data / "tpl-branch-general-information.csv"
+    csv_path.write_text(csv_path.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    after_csv = data_store.data_revision()
+    assert after_graph != after_csv
+    page = client.get("/").text
+    assert f"{STATIC_VERSION}-{after_csv}" in page
+
+
 def test_overview_is_cached_and_data_routes_have_http_cache_headers(sample_data):
     first = client.get("/overview")
     second = client.get("/overview")
@@ -272,9 +332,12 @@ def test_frontend_uses_plotly_tabs_and_mobile_friendly_comparison_controls():
     html = (root / "templates" / "index.html").read_text(encoding="utf-8")
     js = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
     css = (root / "static" / "css" / "app.css").read_text(encoding="utf-8")
-    assert "plotly-2.35.2.min.js" in html
+    assert "plotly-2.35.2.min.js" in js
     assert "role=\"tablist\"" in js
     assert "compare-branch-option" in js
+    assert "of 5 selected" in js
+    assert "slice(0, 5)" in js
+    assert 'id="branch-select"' in js
     assert "Ctrl (Windows)" not in js and "Command (Mac)" not in js
     assert "data-status" not in html
     assert "--focus: #8ed8ef" in css
@@ -284,8 +347,35 @@ def test_frontend_uses_plotly_tabs_and_mobile_friendly_comparison_controls():
     assert "--button-text: #10212a" in css
     assert ".button.secondary" in css and "color: var(--text)" in css
     assert "role=\"tabpanel\" tabindex=\"0\"" in js
+    assert "aria-controls=\"comparison-view-annual\"" in js
+    assert "enableTabKeyboard(comparisonTabs" in js
+    assert "enableTabKeyboard(metricTabList" in js
     assert "answer-highlights" in js
+    assert "Annual ${metricName(metric)}" in js
+    assert "Network vs. Service-Tier Trends" in js
+    assert "Metric Distribution" in js
+    assert "Annual Metrics vs. Square Footage" in js
+    assert "Annual metric correlation" in js
+    assert "Overachievers" in js and "Underutilized" in js
+    assert "View branch locations as a table" in js
+    assert "map-branch-select" in js
+    assert "Branch details" not in js
+    assert "Find a Branch" not in js
+    assert "Branches by service tier" not in js
+    assert "Annual Trend" not in js
+    assert "Export CSV" not in js
+    assert "Type of Library:" in js and "Year Opened:" in js and "# of Workstations:" in js
+    assert "branch.lat !== null" in js and "branch.lon !== null" in js
+    assert "Download matching events CSV" in js
+    assert "Events by audience" in js and "Events by language" in js
+    assert "View ${label.toLowerCase()} data" not in js
     assert "@media (max-width: 850px)" in css and "@media (max-width: 560px)" in css
+    assert ".text-button, .settings select {" in css
+    control_rule = css.split(".text-button, .settings select {", 1)[1].split("}", 1)[0]
+    assert "height: 44px;" in control_rule and "min-height: 44px;" in control_rule and "max-height: 44px;" in control_rule
+    assert "hovermode: 'closest'" in js and "x unified" not in js
+    assert "data-cache-version" in html
+    assert "CACHE_STALE_MS" in js and "sessionStorage" in js
 
 
 def test_custom_404_page_and_unknown_route_is_html():
