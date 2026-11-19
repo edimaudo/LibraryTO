@@ -1,6 +1,6 @@
 # LibraryTO
 
-LibraryTO is a responsive web application for exploring Toronto Public Library branch information, annual activity, reported services, connected branch information and upcoming programs. It is designed for residents and other non-technical users. It does not produce holistic branch performance ratings. It does include the requested metric-specific Top 10/Bottom 10 comparisons and a visitation-versus-square-footage quadrant analysis; these describe individual measures and relative branch size, not overall branch quality.
+LibraryTO is a web application to understand the Toronto Public Library Network.
 
 ## Technology
 
@@ -10,7 +10,6 @@ LibraryTO is a responsive web application for exploring Toronto Public Library b
 - Plotly.js for interactive, responsive charts
 - Leaflet for branch maps
 - Relate embedded graph database through `relate-db`
-- CSV deployment snapshots and one Relate `.rl` database in `data/`
 - Vercel Python Functions
 - Statsmodels ARIMA for branch-level forecasts
 
@@ -43,8 +42,6 @@ LibraryTO/
 └── vercel.json
 ```
 
-There is one FastAPI application in the root `main.py`. The `app/` directory contains supporting services only. All six CSV files and the Relate database are stored directly in the single `data/` directory.
-
 ## Local development
 
 Use Python 3.12.
@@ -58,7 +55,6 @@ uvicorn main:app --reload
 
 Open `http://127.0.0.1:8000`.
 
-Add the seven data assets using the exact filenames above, then run:
 
 ```bash
 python scripts/validate_data.py
@@ -163,58 +159,6 @@ The graph is not created, seeded, written, mutated or checkpointed by LibraryTO.
 
 The interface is designed against WCAG 2.2 AA practices, but no conformance claim is made without a manual audit using keyboard-only navigation, screen readers, browser zoom/reflow, contrast measurement and representative mobile devices. Plotly and Leaflet output should also be included in that audit.
 
-## Application URLs
 
-The web app uses descriptive resource-based paths. No route contains an `/api` prefix.
 
-- Pages: `/`, `/branch-insights`, `/comparisons`, `/programs-events`
-- Overview data: `/overview`
-- Branch directory and profiles: `/branches`, `/branches/{code}`, `/branches/{code}/forecasts`
-- Branch comparison data: `/comparisons/data`
-- Event filter options and recommendations: `/events/options`, `/events/recommendations`
-- Search and branch questions: `/search`, `/ask`
-- Application status: `/status`, `/health`
-- CSV downloads: `/exports/observations.csv`, `/exports/branches.csv`, `/exports/comparisons.csv`, `/exports/events.csv`
 
-HTML pages are served as HTML. Data routes return JSON where needed. CSV export routes return downloadable files.
-
-## Vercel deployment
-
-The project retains the deployment configuration supplied for LibraryTO in `vercel.json`:
-
-```json
-{
-  "version": 2,
-  "builds": [
-    {
-      "src": "main.py",
-      "use": "@vercel/python",
-      "config": {
-        "maxDuration": 300,
-        "memory": 1024,
-        "includeFiles": "data/**"
-      }
-    }
-  ],
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "main.py"
-    },
-    {
-      "source": "/(.*)",
-      "destination": "main.py"
-    }
-  ]
-}
-```
-
-Keep `main.py`, `vercel.json`, `requirements.txt`, `app/`, `templates/`, `static/` and `data/` at the project root. The two rewrite entries are retained exactly as specified. The `includeFiles` setting bundles the graph and CSV source snapshots with the Python function. The Relate file is opened read-only; do not rely on writes to the Vercel function filesystem.
-
-## Scope exclusions
-
-LibraryTO does not use population datasets, neighbourhood polygons or neighbourhood service-coverage analysis. It does not evaluate holistic branch performance or assign an overall branch rank. Metric-specific Top 10/Bottom 10 charts and visitation-versus-square-footage quadrants are descriptive analyses only. The app does not infer unique visitors or claim program effectiveness from event metadata.
-
-## Verification boundary
-
-The current source archive does not contain your six CSV files or `tpl_library_graph.rl`. Automated tests therefore use controlled CSV fixtures and a mocked Relate client. The actual source column mappings, the 100-branch count, graph schema and Q&A retrieval, event-feed freshness, forecast suitability and browser-level accessibility must be verified after the real data assets are added.
