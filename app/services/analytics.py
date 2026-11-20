@@ -1,10 +1,9 @@
-"""Cached descriptive analytics, comparisons, event matching and ARIMA forecasts."""
+"""Cached descriptive analytics, Relate-backed comparisons and ARIMA forecasts."""
 from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, time
 from functools import lru_cache
-from statistics import mean
 from typing import Any
 from zoneinfo import ZoneInfo
 import math
@@ -14,12 +13,7 @@ import warnings
 from app.services.data_store import branch_records, observations, event_records
 
 TORONTO_TZ = ZoneInfo("America/Toronto")
-METRICS = {
-    "circulation": "Annual Circulation",
-    "visits": "Annual Visitation",
-    "workstations": "Annual Workstation Usage",
-    "registrations": "Annual Card Registrations",
-}
+METRICS = {"circulation": "Annual Circulation", "visits": "Annual Visitation", "workstations": "Annual Workstation Usage", "registrations": "Annual Card Registrations"}
 
 
 def _today() -> date:
@@ -33,129 +27,86 @@ def _year_key(value: str) -> tuple[int, str]:
         return 0, str(value)
 
 
-@lru_cache(maxsize=1)
-def overview() -> dict[str, Any]:
-    """Build one process-cached overview payload for all overview visualizations."""
-    branches = branch_records()
-    branch_by_code = {branch["code"].casefold(): branch for branch in branches}
-    all_observations = observations()
-    trend_values: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
-    years_by_metric: dict[str, set[str]] = defaultdict(set)
-    latest_totals: dict[str, float] = {}
-    latest_years: dict[str, str] = {}
-    unique: dict[tuple[str, str, str], float] = {}
-    canonical_codes = {branch["code"].casefold(): branch["code"] for branch in branches}
-    for item in all_observations:
-        canonical_code = canonical_codes.get(item["branch_code"].casefold())
-        if canonical_code:
-            unique[(item["metric"], item["year"], canonical_code)] = item["value"]
-    for (metric, year, code), value in unique.items():
-        trend_values[metric][year] += value
-        years_by_metric[metric].add(year)
-
-    trend: dict[str, list[dict[str, Any]]] = {}
-    annual_values: dict[str, list[dict[str, Any]]] = {}
-    years: set[str] = set()
-    for metric in METRICS:
-        ordered_years = sorted(years_by_metric.get(metric, set()), key=_year_key)
-        years.update(ordered_years)
-        trend[metric] = [
-            {"year": year, "value": round(trend_values[metric][year], 2)}
-            for year in ordered_years
-        ]
-        annual_values[metric] = [
-            {
-                "year": year,
-                "values": {
-                    branch["code"]: unique.get((metric, year, branch["code"]))
-                    for branch in branches
-                },
-            }
-            for year in ordered_years
-        ]
-        if ordered_years:
-            latest = ordered_years[-1]
-            latest_years[metric] = latest
-            latest_totals[metric] = round(trend_values[metric][latest], 2)
-
-    tier_counts: dict[str, int] = defaultdict(int)
-    for branch in branches:
-        tier_counts[branch["service_tier_code"] or "Other"] += 1
-
-    tier_trends: dict[str, dict[str, list[dict[str, Any]]]] = {}
-    for metric in METRICS:
-        metric_rows = []
-        for year_row in annual_values[metric]:
-            tier_totals: dict[str, float] = defaultdict(float)
-            tier_n: dict[str, int] = defaultdict(int)
-            for branch in branches:
-                value = year_row["values"].get(branch["code"])
-                if value is None:
-                    continue
-                tier = branch["service_tier_code"] or "Other"
-                tier_totals[tier] += value
-                tier_n[tier] += 1
-            metric_rows.append({
-                "year": year_row["year"],
-                "network": sum(value for value in year_row["values"].values() if value is not None),
-                "tiers": {tier: {"value": round(tier_totals[tier], 2), "n": tier_n[tier]} for tier in sorted(tier_totals)},
-            })
-        tier_trends[metric] = metric_rows
-
-    return {
-        "branch_count": len(branches),
-        "totals": latest_totals,
-        "latest_years": latest_years,
-        "trend": trend,
-        "tiers": dict(sorted(tier_counts.items())),
-        "metrics": METRICS,
-        "branches": branches,
-        "years": sorted(years, key=_year_key),
-        "annual_values": annual_values,
-        "tier_trends": tier_trends,
-    }
-
-
-def _parse_event_datetime(raw: str) -> datetime | None:
-    value = str(raw or "").strip()
-    if not value:
+def _event_datetime(event: dict[str, Any]) -> datetime | None:
+    raw = str(event.get("start") or "").strip()
+    if not raw:
         return None
-    normalized = value.replace("Z", "+00:00")
-    candidates = [normalized, normalized.replace(" ", "T", 1)]
-    for candidate in candidates:
-        try:
-            parsed = datetime.fromisoformat(candidate)
-            return parsed.replace(tzinfo=None) if parsed.tzinfo else parsed
-        except ValueError:
-            pass
-    patterns = (
-        "%Y-%m-%d %H:%M", "%Y-%m-%d %I:%M %p", "%Y-%m-%d %I:%M%p", "%Y-%m-%d",
-        "%m/%d/%Y %H:%M", "%m/%d/%Y %I:%M %p", "%m/%d/%Y",
-    )
-    for pattern in patterns:
-        try:
-            return datetime.strptime(value, pattern)
-        except ValueError:
-            pass
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        for pattern in ("%Y-%m-%d %H:%M", "%Y-%m-%d %I:%M %p", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(raw, pattern)
+            except ValueError:
+                pass
     return None
 
 
-def _event_datetime(event: dict[str, Any]) -> datetime | None:
-    return _parse_event_datetime(str(event.get("start") or ""))
-
-
 def _event_end_datetime(event: dict[str, Any]) -> datetime | None:
-    return _parse_event_datetime(str(event.get("end") or ""))
-
-
-def _event_date(event: dict[str, Any]) -> date | None:
-    parsed = _event_datetime(event)
-    return parsed.date() if parsed else None
+    raw = str(event.get("end") or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        for pattern in ("%Y-%m-%d %H:%M", "%Y-%m-%d %I:%M %p", "%Y-%m-%d"):
+            try:
+                return datetime.strptime(raw, pattern)
+            except ValueError:
+                pass
+    return None
 
 
 def _event_sort_key(event: dict[str, Any]) -> tuple[int, str]:
     parsed = _event_datetime(event)
-    return (0 if parsed else 1, parsed.isoformat() if parsed else str(event.get("start", "")))
+    return (0 if parsed else 1, parsed.isoformat() if parsed else "")
+
+
+@lru_cache(maxsize=1)
+def overview() -> dict[str, Any]:
+    """Build one cached payload containing every reporting year and physical branch."""
+    branches = branch_records()
+    branch_codes = {branch["code"].casefold(): branch["code"] for branch in branches}
+    unique: dict[tuple[str, str, str], float] = {}
+    for item in observations():
+        code = branch_codes.get(item["branch_code"].casefold())
+        if code:
+            unique[(item["metric"], str(item["year"]), code)] = float(item["value"])
+    years_by_metric: dict[str, set[str]] = defaultdict(set)
+    totals_by_metric_year: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
+    for (metric, year, code), value in unique.items():
+        years_by_metric[metric].add(year)
+        totals_by_metric_year[metric][year] += value
+    trends, annual_values, latest_totals, latest_years = {}, {}, {}, {}
+    all_years: set[str] = set()
+    for metric in METRICS:
+        years = sorted(years_by_metric[metric], key=_year_key)
+        all_years.update(years)
+        trends[metric] = [{"year": year, "value": round(totals_by_metric_year[metric][year], 2)} for year in years]
+        annual_values[metric] = [{"year": year, "values": {branch["code"]: unique.get((metric, year, branch["code"])) for branch in branches}} for year in years]
+        if years:
+            latest_years[metric] = years[-1]
+            latest_totals[metric] = round(totals_by_metric_year[metric][years[-1]], 2)
+    tier_counts: dict[str, int] = defaultdict(int)
+    tier_trends: dict[str, list[dict[str, Any]]] = {}
+    for branch in branches:
+        tier_counts[branch["service_tier_code"] or "Other"] += 1
+    for metric in METRICS:
+        series = []
+        for record in annual_values[metric]:
+            tier_totals: dict[str, float] = defaultdict(float)
+            tier_n: dict[str, int] = defaultdict(int)
+            for branch in branches:
+                value = record["values"].get(branch["code"])
+                if value is not None:
+                    tier = branch["service_tier_code"] or "Other"
+                    tier_totals[tier] += float(value)
+                    tier_n[tier] += 1
+            series.append({"year": record["year"], "tiers": {tier: {"value": round(tier_totals[tier], 2), "n": tier_n[tier]} for tier in sorted(tier_totals)}})
+        tier_trends[metric] = series
+    return {"branch_count": len(branches), "totals": latest_totals, "latest_years": latest_years, "trend": trends,
+            "tiers": dict(sorted(tier_counts.items())), "metrics": METRICS, "branches": branches,
+            "years": sorted(all_years, key=_year_key), "annual_values": annual_values, "tier_trends": tier_trends}
 
 
 @lru_cache(maxsize=100)
@@ -165,293 +116,202 @@ def branch_detail(code: str) -> dict[str, Any] | None:
         return None
     rows = [item for item in observations() if item["branch_code"].casefold() == code.casefold()]
     unique = {(item["metric"], item["year"]): item["value"] for item in rows}
-    history: dict[str, list[dict[str, Any]]] = {}
+    history = {}
     for metric in METRICS:
-        metric_rows = [
-            {"year": year, "value": value}
-            for (metric_key, year), value in unique.items() if metric_key == metric
-        ]
-        history[metric] = sorted(metric_rows, key=lambda item: _year_key(item["year"]))
-
+        history[metric] = sorted([{"year": year, "value": value} for (key, year), value in unique.items() if key == metric], key=lambda row: _year_key(row["year"]))
     hosted = []
     today = _today()
     for event in event_records():
         event_code = event.get("branch_code", "")
         location = event.get("location", "")
-        code_match = bool(event_code) and event_code.casefold() == code.casefold()
-        name_match = bool(branch["name"]) and branch["name"].casefold() in location.casefold()
-        event_date = _event_date(event)
-        if (code_match or name_match) and (event_date is None or event_date >= today):
+        when = _event_datetime(event)
+        if when is not None and when.date() >= today and ((event_code and event_code.casefold() == code.casefold()) or branch["name"].casefold() in location.casefold()):
             hosted.append(event)
     hosted.sort(key=_event_sort_key)
     return {"branch": branch, "history": history, "events": hosted}
 
 
+def _csv_compare(clean_codes: tuple[str, ...]) -> dict[str, Any]:
+    lookup = {item["code"].casefold(): item for item in branch_records()}
+    selected = [lookup[code.casefold()] for code in clean_codes if code.casefold() in lookup]
+    selected_codes = {item["code"].casefold() for item in selected}
+    values: dict[str, dict[str, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
+    for row in observations():
+        if row["branch_code"].casefold() in selected_codes:
+            values[row["metric"]][row["year"]][row["branch_code"]] = float(row["value"])
+    metrics = {metric: [{"year": year, "values": {branch["code"]: values[metric][year].get(branch["code"]) for branch in selected}} for year in sorted(values[metric], key=_year_key)] for metric in METRICS}
+    return {"branches": selected, "metrics": metrics, "metric_labels": METRICS, "data_source": "Relate graph if available; CSV snapshot fallback"}
+
+
 def compare(codes: list[str]) -> dict[str, Any]:
-    clean_codes = tuple(dict.fromkeys(code.strip() for code in codes if code.strip()))[:5]
-    return _compare_cached(clean_codes)
+    return _compare_cached(tuple(dict.fromkeys(code.strip() for code in codes if code.strip()))[:5])
 
 
 @lru_cache(maxsize=256)
 def _compare_cached(clean_codes: tuple[str, ...]) -> dict[str, Any]:
-    branch_lookup = {item["code"].casefold(): item for item in branch_records()}
-    selected = [branch_lookup[code.casefold()] for code in clean_codes if code.casefold() in branch_lookup]
-    selected_codes = {item["code"].casefold() for item in selected}
-    data: dict[str, dict[str, dict[str, float]]] = defaultdict(lambda: defaultdict(dict))
-    unique: dict[tuple[str, str, str], float] = {}
-    for row in observations():
-        if row["branch_code"].casefold() in selected_codes:
-            unique[(row["metric"], row["year"], row["branch_code"])] = row["value"]
-    canonical_codes = {item["code"].casefold(): item["code"] for item in selected}
-    for (metric, year, code), value in unique.items():
-        canonical = canonical_codes.get(code.casefold())
-        if canonical:
-            data[metric][year][canonical] = value
-    metrics = {}
-    for metric in METRICS:
-        metrics[metric] = [
-            {
-                "year": year,
-                "values": {branch["code"]: data[metric][year].get(branch["code"]) for branch in selected},
-            }
-            for year in sorted(data.get(metric, {}), key=_year_key)
-        ]
-    return {"branches": selected, "metrics": metrics, "metric_labels": METRICS}
+    """Use Relate graph metric nodes when the graph is available, then CSV fallback."""
+    if not clean_codes:
+        return {"branches": [], "metrics": {metric: [] for metric in METRICS}, "metric_labels": METRICS, "data_source": "Relate graph"}
+    try:
+        from app.services.relate_compare import compare_from_relate
+        graph_result = compare_from_relate(clean_codes)
+        if graph_result and graph_result.get("metrics"):
+            return graph_result
+    except Exception:
+        # A read-only CSV snapshot remains a deterministic fallback if the .rl
+        # file is absent or its schema does not expose annual observations.
+        pass
+    return _csv_compare(clean_codes)
 
 
 def _parse_date(value: Any) -> date | None:
-    if not value:
-        return None
     try:
-        return date.fromisoformat(str(value))
+        return date.fromisoformat(str(value)) if value else None
     except ValueError:
         return None
 
 
 def _parse_time(value: Any) -> time | None:
-    if not value:
-        return None
     try:
-        return time.fromisoformat(str(value))
+        return time.fromisoformat(str(value)) if value else None
     except ValueError:
         return None
+
+
+def _split_values(raw: Any) -> list[str]:
+    return list(dict.fromkeys(value.strip() for value in re.split(r"[;,|]+", str(raw or "")) if value.strip()))
+
+
+def summarize_event_list(events: list[dict[str, Any]], branch_lookup: dict[str, str] | None = None) -> dict[str, Any]:
+    branch_lookup = branch_lookup or {item["code"].casefold(): item["name"] for item in branch_records()}
+    counts: dict[str, dict[str, int]] = {key: defaultdict(int) for key in ("types", "audiences", "languages", "branches")}
+    for event in events:
+        for key in ("types", "audiences", "languages"):
+            for value in _split_values(event.get(key)):
+                counts[key][value] += 1
+        code = str(event.get("branch_code") or "").casefold()
+        label = branch_lookup.get(code) or str(event.get("location") or "Not specified").strip()
+        if label:
+            counts["branches"][label] += 1
+    order = lambda values: [{"label": label, "count": count} for label, count in sorted(values.items(), key=lambda item: (-item[1], item[0].casefold()))]
+    return {"total_upcoming": len(events), **{key: order(values) for key, values in counts.items()}}
+
+
+@lru_cache(maxsize=1)
+def event_discovery_analysis() -> dict[str, Any]:
+    today = _today()
+    events = [event for event in event_records() if (when := _event_datetime(event)) is not None and when.date() >= today]
+    return summarize_event_list(events)
 
 
 @lru_cache(maxsize=1)
 def event_filter_options() -> dict[str, Any]:
     events = event_records()
-    unique_values = lambda key: sorted({str(item.get(key) or "").strip() for item in events if str(item.get(key) or "").strip()}, key=str.casefold)
-    branches = [{"code": item["code"], "name": item["name"]} for item in branch_records()]
-    return {
-        "audiences": unique_values("audiences"),
-        "languages": unique_values("languages"),
-        "event_types": unique_values("types"),
-        "branches": branches,
-        "analysis": event_discovery_analysis(),
-    }
-
-
-def summarize_event_list(events: list[dict[str, Any]], branch_lookup: dict[str, str] | None = None) -> dict[str, Any]:
-    branch_lookup = branch_lookup or {item["code"].casefold(): item["name"] for item in branch_records()}
-    counts: dict[str, dict[str, int]] = {
-        "types": defaultdict(int), "audiences": defaultdict(int),
-        "languages": defaultdict(int), "branches": defaultdict(int),
-    }
-
-    def split_values(raw: Any) -> list[str]:
-        values = re.split(r"[;,|]+", str(raw or ""))
-        return list(dict.fromkeys(value.strip() for value in values if value.strip()))
-
-    for event in events:
-        for key in ("types", "audiences", "languages"):
-            for value in split_values(event.get(key)):
-                counts[key][value] += 1
-        code = str(event.get("branch_code") or "").casefold()
-        branch_label = branch_lookup.get(code) or str(event.get("location") or "Not specified").strip()
-        if branch_label:
-            counts["branches"][branch_label] += 1
-
-    def ordered(values: dict[str, int]) -> list[dict[str, Any]]:
-        return [{"label": label, "count": count} for label, count in sorted(values.items(), key=lambda item: (-item[1], item[0].casefold()))]
-
-    return {
-        "total_upcoming": len(events),
-        "types": ordered(counts["types"]),
-        "audiences": ordered(counts["audiences"]),
-        "languages": ordered(counts["languages"]),
-        "branches": ordered(counts["branches"]),
-    }
+    unique = lambda key: sorted({str(item.get(key) or "").strip() for item in events if str(item.get(key) or "").strip()}, key=str.casefold)
+    return {"audiences": unique("audiences"), "languages": unique("languages"), "event_types": unique("types"),
+            "branches": [{"code": item["code"], "name": item["name"]} for item in branch_records()], "analysis": event_discovery_analysis()}
 
 
 def recommend_events(preferences: dict[str, Any]) -> dict[str, Any]:
-    """Find upcoming events using only supplied event-feed attributes."""
-    cache_key = tuple(sorted((str(key), str(value or "")) for key, value in preferences.items()))
-    return _recommend_events_cached(cache_key)
+    key = tuple(sorted((str(name), str(value or "")) for name, value in preferences.items()))
+    return _recommend_events_cached(key)
 
 
 @lru_cache(maxsize=512)
 def _recommend_events_cached(cache_key: tuple[tuple[str, str], ...]) -> dict[str, Any]:
-    preferences = dict(cache_key)
-    selected_date = _parse_date(preferences.get("date"))
-    start_time = _parse_time(preferences.get("start_time"))
-    end_time = _parse_time(preferences.get("end_time"))
-    requested = {
-        "audience": str(preferences.get("audience") or "").strip().casefold(),
-        "language": str(preferences.get("language") or "").strip().casefold(),
-        "event_type": str(preferences.get("event_type") or "").strip().casefold(),
-        "branch": str(preferences.get("branch") or "").strip().casefold(),
-        "interest": str(preferences.get("interest") or "").strip().casefold(),
-    }
-    available_only = str(preferences.get("registration") or "").strip().casefold() in {"available", "open", "true", "1"}
+    prefs = dict(cache_key)
+    selected_date, start_time, end_time = _parse_date(prefs.get("date")), _parse_time(prefs.get("start_time")), _parse_time(prefs.get("end_time"))
+    requested = {key: str(prefs.get(key) or "").strip().casefold() for key in ("audience", "language", "event_type", "branch", "interest")}
+    available_only = str(prefs.get("registration") or "").casefold() in {"available", "open", "true", "1"}
     branch_lookup = {item["code"].casefold(): item for item in branch_records()}
     selected_branch = branch_lookup.get(requested["branch"])
-    selected_branch_name = selected_branch["name"].casefold() if selected_branch else ""
     candidates = []
+    today = _today()
     for event in event_records():
-        when = _event_datetime(event)
-        if when is None or when.date() < _today():
+        start = _event_datetime(event)
+        if start is None or start.date() < today:
             continue
-        if selected_date and when.date() != selected_date:
+        if selected_date and start.date() != selected_date:
             continue
-        if start_time and when.time() < start_time:
+        if start_time and start.time() < start_time:
             continue
-        event_end = _event_end_datetime(event)
-        if end_time and (event_end is None or event_end.time() > end_time):
+        end = _event_end_datetime(event)
+        if end_time and (end is None or end.time() > end_time):
             continue
-        is_unavailable = bool(event["full"] or event["closed"])
-        if available_only and (not event.get("registration_open") or event["full"] or event["closed"]):
-            continue
-        score = 0
-        reasons = []
-        checks = (
-            ("audience", event["audiences"] or "", "Audience"),
-            ("language", event["languages"] or "", "Language"),
-            ("event_type", event["types"] or "", "Type"),
-        )
-        # Explicit categorical selections are filters, not ranking hints. Interests
-        # remain relevance signals because they are free-text and can match loosely.
-        matches_selected_categories = True
-        for key, haystack, label in checks:
-            target = requested[key]
-            if target:
-                if target not in str(haystack).casefold():
-                    matches_selected_categories = False
-                    break
-                score += 2
-                reasons.append(label)
-        if not matches_selected_categories:
+        checks = (("audience", event.get("audiences", "")), ("language", event.get("languages", "")), ("event_type", event.get("types", "")))
+        if any(requested[key] and requested[key] not in str(value).casefold() for key, value in checks):
             continue
         if requested["branch"]:
-            event_location = str(event.get("location") or "").casefold()
             event_code = str(event.get("branch_code") or "").casefold()
-            branch_matches = requested["branch"] == event_code or (
-                bool(selected_branch_name) and selected_branch_name in event_location
-            )
-            if not branch_matches:
+            location = str(event.get("location") or "").casefold()
+            if requested["branch"] != event_code and not (selected_branch and selected_branch["name"].casefold() in location):
                 continue
+        full_or_closed = bool(event.get("full") or event.get("closed"))
+        if available_only and (not event.get("registration_open") or full_or_closed):
+            continue
+        score, reasons = 0, []
+        for key, value in checks:
+            if requested[key]:
+                score += 2
+                reasons.append(key.replace("_", " ").title())
+        interest = requested["interest"]
+        if interest:
+            words = [word for word in re.findall(r"[\w'-]+", interest) if len(word) > 1]
+            blob = " ".join(str(event.get(key) or "") for key in ("title", "description", "types")).casefold()
+            matches = [word for word in words if word in blob]
+            score += 3 * len(matches)
+            reasons.extend(matches[:3])
+        if requested["branch"]:
             score += 2
             reasons.append("Branch")
-        interest = requested["interest"]
-        text_blob = " ".join((event["title"], event["description"], event["types"])).casefold()
-        if interest:
-            terms = [term for term in re.findall(r"[\w'-]+", interest) if len(term) > 1]
-            matched_terms = [term for term in terms if term in text_blob]
-            if matched_terms:
-                score += 3 * len(matched_terms)
-                reasons.extend(matched_terms[:3])
-        if is_unavailable:
+        if full_or_closed:
             reasons.append("Full or closed")
-        candidates.append({
-            **event,
-            "match_score": score,
-            "match_reasons": reasons,
-            "registration_status": "Full" if event["full"] else "Closed" if event["closed"] else "Registration open" if event.get("registration_open") else "Availability not supplied",
-            "available_for_registration": bool(event.get("registration_open")),
-            "start_iso": when.isoformat(),
-            "end_iso": event_end.isoformat() if event_end else None,
-        })
-    candidates.sort(key=lambda item: (-item["match_score"], item["start_iso"], item["title"].casefold()))
-    return {
-        "events": candidates[:100],
-        "total": len(candidates),
-        "date": selected_date.isoformat() if selected_date else None,
-        "analysis": summarize_event_list(candidates, {key: value["name"] for key, value in branch_lookup.items()}),
-    }
-
-
-@lru_cache(maxsize=1)
-def event_discovery_analysis() -> dict[str, Any]:
-    """Descriptive upcoming-event breakdowns based only on fields in the event feed."""
-    today = _today()
-    upcoming = []
-    for event in event_records():
-        when = _event_datetime(event)
-        if when is not None and when.date() >= today:
-            upcoming.append(event)
-    return summarize_event_list(upcoming)
+        candidates.append({**event, "match_score": score, "match_reasons": reasons,
+                           "registration_status": "Full" if event.get("full") else "Closed" if event.get("closed") else "Registration open" if event.get("registration_open") else "Availability not supplied",
+                           "available_for_registration": bool(event.get("registration_open")),
+                           "start_iso": start.isoformat(), "end_iso": end.isoformat() if end else None})
+    candidates.sort(key=lambda event: (-event["match_score"], event["start_iso"], event["title"].casefold()))
+    return {"events": candidates[:100], "total": len(candidates), "date": selected_date.isoformat() if selected_date else None,
+            "analysis": summarize_event_list(candidates, {code: branch["name"] for code, branch in branch_lookup.items()})}
 
 
 @lru_cache(maxsize=100)
 def branch_forecasts(code: str) -> dict[str, Any] | None:
-    """Fit a small ARIMA candidate set and return estimates for 2025 and 2026 only."""
+    """Fit an ARIMA model and forecast exactly one year after the final observation."""
     detail = branch_detail(code)
     if detail is None:
         return None
-    output: dict[str, Any] = {}
+    output = {}
     for metric, rows in detail["history"].items():
-        point_map: dict[int, float] = {}
-        for row in rows:
-            try:
-                point_map[int(row["year"])] = float(row["value"])
-            except (TypeError, ValueError):
-                continue
-        points = sorted(point_map.items())
-        targets = [year for year in (2025, 2026) if not points or year > points[-1][0]]
+        points = sorted({int(row["year"]): float(row["value"]) for row in rows if str(row["year"]).isdigit()}.items())
         if len(points) < 6:
-            output[metric] = {"available": False, "reason": "Not enough historical data to estimate this measure.", "observations": len(points), "forecasts": []}
+            output[metric] = {"available": False, "reason": "At least six annual observations are needed for a forecast.", "forecasts": []}
             continue
         years = [year for year, _ in points]
         if years != list(range(years[0], years[-1] + 1)):
-            output[metric] = {"available": False, "reason": "Annual records contain gaps, so a reliable annual forecast cannot be calculated.", "observations": len(points), "forecasts": []}
-            continue
-        if not targets:
-            output[metric] = {"available": False, "reason": "Historical records already include both forecast years.", "observations": len(points), "forecasts": []}
+            output[metric] = {"available": False, "reason": "The annual record has gaps, so a forecast is not available.", "forecasts": []}
             continue
         try:
             from statsmodels.tsa.arima.model import ARIMA
             import numpy as np
             values = np.asarray([value for _, value in points], dtype=float)
-            candidates = [(0, 1, 0), (1, 1, 0), (0, 1, 1), (1, 1, 1), (2, 1, 0), (0, 1, 2)]
-            best_fit = None
-            best_aic = math.inf
+            candidates = ((0, 1, 0), (1, 1, 0), (0, 1, 1), (1, 1, 1), (2, 1, 0), (0, 1, 2))
+            best, best_aic = None, math.inf
             for order in candidates:
                 try:
                     with warnings.catch_warnings():
                         warnings.simplefilter("ignore")
                         fitted = ARIMA(values, order=order, enforce_stationarity=False, enforce_invertibility=False).fit()
                     if math.isfinite(float(fitted.aic)) and float(fitted.aic) < best_aic:
-                        best_fit, best_aic = fitted, float(fitted.aic)
+                        best, best_aic = fitted, float(fitted.aic)
                 except Exception:
                     continue
-            if best_fit is None:
-                raise RuntimeError("No ARIMA model could be fitted to this history.")
-            steps = 2026 - years[-1]
-            predicted = best_fit.get_forecast(steps=steps).predicted_mean
-            forecast_points = []
-            for offset, estimate in enumerate(predicted, start=1):
-                target_year = years[-1] + offset
-                if target_year in targets:
-                    forecast_points.append({"year": target_year, "value": round(max(0.0, float(estimate)), 2)})
-            output[metric] = {
-                "available": bool(forecast_points),
-                "method": "ARIMA",
-                "observations": len(points),
-                "historical_start": years[0],
-                "historical_end": years[-1],
-                "forecasts": forecast_points,
-            }
-            if not forecast_points:
-                output[metric]["reason"] = "No forecast years remain after the latest reporting year."
+            if best is None:
+                raise RuntimeError("No ARIMA candidate could be fitted")
+            estimate = float(best.get_forecast(steps=1).predicted_mean[0])
+            target_year = years[-1] + 1
+            output[metric] = {"available": True, "method": "ARIMA", "observations": len(points), "historical_end": years[-1],
+                              "forecasts": [{"year": target_year, "value": round(max(0, estimate), 2)}]}
         except Exception:
-            output[metric] = {"available": False, "reason": "A forecast could not be produced from the available annual records.", "observations": len(points), "forecasts": []}
+            output[metric] = {"available": False, "reason": "A forecast could not be calculated from the available annual records.", "forecasts": []}
     return output
