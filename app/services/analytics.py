@@ -152,16 +152,36 @@ def _compare_cached(clean_codes: tuple[str, ...]) -> dict[str, Any]:
     """Use Relate graph metric nodes when the graph is available, then CSV fallback."""
     if not clean_codes:
         return {"branches": [], "metrics": {metric: [] for metric in METRICS}, "metric_labels": METRICS, "data_source": "Relate graph"}
+    csv_result = _csv_compare(clean_codes)
     try:
         from app.services.relate_compare import compare_from_relate
         graph_result = compare_from_relate(clean_codes)
         if graph_result and graph_result.get("metrics"):
+            # The graph can contain one or more metric node types without all
+            # four annual measures. Supplement missing branch-years from the
+            # same filtered CSV snapshots instead of returning partial tabs.
+            for metric in METRICS:
+                graph_rows = {str(row["year"]): row for row in graph_result.get("metrics", {}).get(metric, [])}
+                csv_rows = {str(row["year"]): row for row in csv_result.get("metrics", {}).get(metric, [])}
+                merged = {}
+                for year in sorted(set(graph_rows) | set(csv_rows), key=_year_key):
+                    graph_values = dict(graph_rows.get(year, {}).get("values", {}))
+                    csv_values = dict(csv_rows.get(year, {}).get("values", {}))
+                    values = {
+                        branch_code: graph_values.get(branch_code)
+                        if graph_values.get(branch_code) is not None
+                        else csv_values.get(branch_code)
+                        for branch_code in (item["code"] for item in graph_result["branches"])
+                    }
+                    merged[year] = {"year": year, "values": values}
+                graph_result["metrics"][metric] = list(merged.values())
+            graph_result["data_source"] = "Relate graph with CSV supplementation"
             return graph_result
     except Exception:
-        # A read-only CSV snapshot remains a deterministic fallback if the .rl
-        # file is absent or its schema does not expose annual observations.
+        # CSV snapshots remain the deterministic fallback when Relate is not
+        # installed, the graph is unavailable, or its schema is incomplete.
         pass
-    return _csv_compare(clean_codes)
+    return csv_result
 
 
 def _parse_date(value: Any) -> date | None:
@@ -199,6 +219,15 @@ def summarize_event_list(events: list[dict[str, Any]], branch_lookup: dict[str, 
 
 @lru_cache(maxsize=1)
 def event_discovery_analysis() -> dict[str, Any]:
+    try:
+        from app.services.relate_events import graph_event_records
+        graph_events = graph_event_records()
+        if graph_events is not None:
+            today = _today()
+            upcoming = [event for event in graph_events if (when := _event_datetime(event)) is not None and when.date() >= today]
+            return summarize_event_list(upcoming)
+    except Exception:
+        pass
     today = _today()
     events = [event for event in event_records() if (when := _event_datetime(event)) is not None and when.date() >= today]
     return summarize_event_list(events)
@@ -206,7 +235,14 @@ def event_discovery_analysis() -> dict[str, Any]:
 
 @lru_cache(maxsize=1)
 def event_filter_options() -> dict[str, Any]:
-    events = event_records()
+    events = None
+    try:
+        from app.services.relate_events import graph_event_records
+        events = graph_event_records()
+    except Exception:
+        events = None
+    if events is None:
+        events = event_records()
     unique = lambda key: sorted({str(item.get(key) or "").strip() for item in events if str(item.get(key) or "").strip()}, key=str.casefold)
     return {"audiences": unique("audiences"), "languages": unique("languages"), "event_types": unique("types"),
             "branches": [{"code": item["code"], "name": item["name"]} for item in branch_records()], "analysis": event_discovery_analysis()}
@@ -220,6 +256,14 @@ def recommend_events(preferences: dict[str, Any]) -> dict[str, Any]:
 @lru_cache(maxsize=512)
 def _recommend_events_cached(cache_key: tuple[tuple[str, str], ...]) -> dict[str, Any]:
     prefs = dict(cache_key)
+    try:
+        from app.services.relate_events import recommend_from_relate
+        graph_result = recommend_from_relate(prefs, limit=10)
+        if graph_result is not None:
+            return graph_result
+    except Exception:
+        # Retain the normalized event-feed path if the Relate graph cannot be read.
+        pass
     selected_date, start_time, end_time = _parse_date(prefs.get("date")), _parse_time(prefs.get("start_time")), _parse_time(prefs.get("end_time"))
     requested = {key: str(prefs.get(key) or "").strip().casefold() for key in ("audience", "language", "event_type", "branch", "interest")}
     available_only = str(prefs.get("registration") or "").casefold() in {"available", "open", "true", "1"}
@@ -271,8 +315,9 @@ def _recommend_events_cached(cache_key: tuple[tuple[str, str], ...]) -> dict[str
                            "available_for_registration": bool(event.get("registration_open")),
                            "start_iso": start.isoformat(), "end_iso": end.isoformat() if end else None})
     candidates.sort(key=lambda event: (-event["match_score"], event["start_iso"], event["title"].casefold()))
-    return {"events": candidates[:100], "total": len(candidates), "date": selected_date.isoformat() if selected_date else None,
-            "analysis": summarize_event_list(candidates, {code: branch["name"] for code, branch in branch_lookup.items()})}
+    shown = candidates[:10]
+    return {"events": shown, "total": len(shown), "date": selected_date.isoformat() if selected_date else None,
+            "analysis": summarize_event_list(shown, {code: branch["name"] for code, branch in branch_lookup.items()})}
 
 
 @lru_cache(maxsize=100)

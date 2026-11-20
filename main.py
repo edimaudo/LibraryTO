@@ -24,7 +24,7 @@ app = FastAPI(title="LibraryTO", version="1.1.0", description="Explore Toronto P
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 # Bump on source changes because static assets are served with immutable caching.
-STATIC_VERSION = "20261120-1"
+STATIC_VERSION = "20261120-2"
 
 
 class AskRequest(BaseModel):
@@ -66,6 +66,75 @@ def _graph_timestamp(value: Any, date_fallback: Any = None) -> str:
                 except ValueError:
                     continue
     return ""
+
+
+def _scope_question_answer(answer: dict[str, Any], branch_code: str | None) -> dict[str, Any]:
+    """Keep branch-Q&A results only when the graph record names the selected branch."""
+    if not branch_code:
+        return answer
+    branch = next((item for item in branch_records() if item["code"].casefold() == branch_code.casefold()), None)
+    if branch is None:
+        raise HTTPException(status_code=404, detail="Branch not found.")
+
+    def normalize(value: Any) -> str:
+        return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+    def belongs(properties: Any) -> bool:
+        if not isinstance(properties, dict):
+            return False
+        values = {normalize(key): value for key, value in properties.items()}
+        code = str(values.get("branchcode") or values.get("tplbranchcode") or "").strip()
+        if code and code.casefold() == branch["code"].casefold():
+            return True
+        branch_name = branch["name"].casefold()
+        for key in ("branchname", "locationname", "location", "branch", "venuename", "venue"):
+            value = str(values.get(key) or "").strip().casefold()
+            if value and (value == branch_name or branch_name in value):
+                return True
+        return False
+
+    evidence = answer.get("evidence") or []
+    scoped = []
+    for item in evidence:
+        if not isinstance(item, dict):
+            continue
+        properties = item.get("properties") or {}
+        normalized_properties = {normalize(key): value for key, value in properties.items()} if isinstance(properties, dict) else {}
+        record_code = str(normalized_properties.get("branchcode") or normalized_properties.get("tplbranchcode") or "").strip()
+        if record_code and record_code.casefold() != branch["code"].casefold():
+            continue
+        matching_connections = [
+            edge for edge in (item.get("connections") or [])
+            if belongs(edge.get("related_properties"))
+        ]
+        if not belongs(properties) and not matching_connections:
+            continue
+        record = dict(item)
+        # Keep only relationships that explicitly point to the selected branch.
+        record["connections"] = matching_connections
+        scoped.append(record)
+    if not scoped:
+        return {
+            "status": "no_branch_matches",
+            "answer": f"I couldn't find graph records linked to {branch['name']} for that question. Try asking about a reported service, annual measure or program at this branch.",
+            "highlights": [],
+            "evidence": [],
+        }
+
+    titles = set()
+    for record in scoped:
+        props = {normalize(key): value for key, value in (record.get("properties") or {}).items()}
+        title = next((str(props[key]).strip() for key in ("name", "title", "branchname", "servicename", "eventtitle", "programname") if props.get(key)), "")
+        if title:
+            titles.add(title.casefold())
+    try:
+        # Rebuild the summaries from branch-scoped graph records so details from
+        # unassociated relationships cannot leak into this branch's answer.
+        from app.services.relate import _summary_highlights
+        filtered = _summary_highlights(scoped)
+    except Exception:
+        filtered = [item for item in (answer.get("highlights") or []) if str(item.get("title") or "").casefold() in titles]
+    return {**answer, "highlights": filtered, "evidence": scoped}
 
 
 def _enrich_question_answer(answer: dict[str, Any]) -> dict[str, Any]:
@@ -221,8 +290,20 @@ async def search_records(q: str = Query(default="", max_length=100)):
 
 @app.post("/ask")
 def branch_question(payload: AskRequest):
-    try: return _enrich_question_answer(relate_ask(payload.question.strip(), payload.branch_code))
-    except RelateUnavailable as exc: raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try:
+        question = payload.question.strip()
+        if payload.branch_code:
+            selected_branch = next((item for item in branch_records() if item["code"].casefold() == payload.branch_code.casefold()), None)
+            if selected_branch is None:
+                raise HTTPException(status_code=404, detail="Branch not found.")
+            # Include the selected branch name in the search terms as well as
+            # its code, because some event/service nodes carry only the name.
+            question = f"{question} {selected_branch['name']}"
+        answer = relate_ask(question, payload.branch_code)
+        answer = _scope_question_answer(answer, payload.branch_code)
+        return _enrich_question_answer(answer)
+    except RelateUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/status")

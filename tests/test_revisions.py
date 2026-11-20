@@ -113,3 +113,123 @@ def test_graph_question_summaries_use_readable_start_and_end_times():
         {"label": "Starts", "value": "2026-03-06 14:00"},
         {"label": "Ends", "value": "2026-03-06 16:00"}
     ]
+
+
+def test_event_finder_caps_displayed_programs_at_ten(snapshots, monkeypatch):
+    future_events = []
+    for index in range(15):
+        future_events.append({
+            "id": f"F{index}", "title": f"Future program {index}",
+            "start": f"2099-04-{index + 1:02d} 10:00", "end": f"2099-04-{index + 1:02d} 11:00",
+            "location": "Physical One", "branch_code": "P1", "audiences": "Adults",
+            "languages": "English", "types": "Workshop", "description": "A future program",
+            "registration_url": "", "event_url": "", "full": False, "closed": False,
+            "registration_open": False, "recurring": False,
+        })
+    monkeypatch.setattr(analytics, "event_records", lambda: future_events)
+    monkeypatch.setattr(analytics, "_today", lambda: analytics.date(2099, 1, 1))
+    analytics._recommend_events_cached.cache_clear()
+    result = analytics.recommend_events({})
+    assert len(result["events"]) == 10
+    assert result["total"] == 10
+    assert result["analysis"]["total_upcoming"] == 10
+    analytics._recommend_events_cached.cache_clear()
+
+
+def test_comparison_supplements_missing_relate_metrics_with_csv(snapshots, monkeypatch):
+    from app.services import relate_compare
+    physical = data_store.branch_records()[0]
+    graph = {
+        "branches": [physical],
+        "metric_labels": analytics.METRICS,
+        "metrics": {
+            "circulation": [{"year": "2022", "values": {physical["code"]: 777}}],
+            "visits": [], "workstations": [], "registrations": [],
+        },
+    }
+    monkeypatch.setattr(relate_compare, "compare_from_relate", lambda codes: graph)
+    analytics._compare_cached.cache_clear()
+    result = analytics.compare([physical["code"]])
+    circulation_2022 = next(row for row in result["metrics"]["circulation"] if row["year"] == "2022")
+    assert circulation_2022["values"][physical["code"]] == 777
+    for metric in ("visits", "workstations", "registrations"):
+        assert result["metrics"][metric]
+        assert result["metrics"][metric][0]["values"][physical["code"]] is not None
+    analytics._compare_cached.cache_clear()
+
+
+def test_branch_question_scope_rejects_other_branch_evidence(snapshots):
+    from main import _scope_question_answer
+    answer = {
+        "answer": "Two branch matches",
+        "highlights": [
+            {"title": "Physical One", "category": "Branch", "details": []},
+            {"title": "Virtual One", "category": "Branch", "details": []},
+        ],
+        "evidence": [
+            {"labels": ["BranchGeneralInformation"], "properties": {"BranchCode": "P1", "BranchName": "Physical One"}, "connections": []},
+            {"labels": ["BranchGeneralInformation"], "properties": {"BranchCode": "V1", "BranchName": "Virtual One"}, "connections": []},
+        ],
+    }
+    scoped = _scope_question_answer(answer, "P1")
+    assert len(scoped["evidence"]) == 1
+    assert scoped["evidence"][0]["properties"]["BranchCode"] == "P1"
+    assert [item["title"] for item in scoped["highlights"]] == ["Physical One"]
+
+
+def test_program_finder_reads_relate_event_nodes(snapshots, monkeypatch):
+    import sys
+    from app.services import relate_events
+
+    graph_path = snapshots / "library.rl"
+    graph_path.write_bytes(b"graph-placeholder")
+    monkeypatch.setattr(relate_events, "RELATE_FILE", graph_path)
+
+    properties = {
+        "Title": "Tea and Entertainment",
+        "EventID": "REL-1",
+        "StartDateLocal": "2099-03-06",
+        "StartTime": "2099-03-06T14:00:00",
+        "EndTime": "2099-03-06T16:00:00",
+        "LocationName": "Physical One",
+        "BranchCode": "P1",
+        "Audiences": "Adults",
+        "Languages": "English",
+        "EventTypes": "Culture",
+        "PhysicalBranch": 1,
+    }
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def execute(self, statement, params=None):
+            if "db.schema.nodeTypeProperties" in statement:
+                return Cursor([
+                    {"nodeLabels": ["EventsFeed"], "propertyName": key}
+                    for key in properties
+                ])
+            if "MATCH (n:`EventsFeed`)" in statement:
+                return Cursor([{"properties": properties}])
+            raise AssertionError(f"Unexpected graph query: {statement}")
+        def close(self):
+            pass
+
+    class RelateModule:
+        @staticmethod
+        def connect(database, read_only=True):
+            assert read_only is True
+            return Connection()
+
+    monkeypatch.setitem(sys.modules, "relate", RelateModule)
+    relate_events._graph_records.cache_clear()
+    result = relate_events.recommend_from_relate({}, limit=10)
+    relate_events._graph_records.cache_clear()
+    assert result is not None
+    assert result["data_source"] == "Relate graph"
+    assert result["total"] == 1
+    assert result["events"][0]["start"] == "2099-03-06 14:00"
+    assert result["events"][0]["end"] == "2099-03-06 16:00"
