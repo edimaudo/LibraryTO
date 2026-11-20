@@ -24,7 +24,7 @@ app = FastAPI(title="LibraryTO", version="1.1.0", description="Explore Toronto P
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 # Bump on source changes because static assets are served with immutable caching.
-STATIC_VERSION = "20261120-2"
+STATIC_VERSION = "20261120-3"
 
 
 class AskRequest(BaseModel):
@@ -292,15 +292,14 @@ async def search_records(q: str = Query(default="", max_length=100)):
 def branch_question(payload: AskRequest):
     try:
         question = payload.question.strip()
-        if payload.branch_code:
-            selected_branch = next((item for item in branch_records() if item["code"].casefold() == payload.branch_code.casefold()), None)
-            if selected_branch is None:
-                raise HTTPException(status_code=404, detail="Branch not found.")
-            # Include the selected branch name in the search terms as well as
-            # its code, because some event/service nodes carry only the name.
-            question = f"{question} {selected_branch['name']}"
+        if payload.branch_code and not any(item["code"].casefold() == payload.branch_code.casefold() for item in branch_records()):
+            raise HTTPException(status_code=404, detail="Branch not found.")
+        # The Relate service performs exact BranchCode predicates for a
+        # selected branch. Do not append branch-name keywords: that was the
+        # source of unrelated branch-directory matches in earlier answers.
         answer = relate_ask(question, payload.branch_code)
-        answer = _scope_question_answer(answer, payload.branch_code)
+        if not answer.get("scope_verified"):
+            answer = _scope_question_answer(answer, payload.branch_code)
         return _enrich_question_answer(answer)
     except RelateUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc

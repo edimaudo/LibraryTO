@@ -29,7 +29,7 @@ The existing graph is a Relate database. It is not Neo4j. The current graph impo
 
 ### Physical branches
 
-The branch directory is the authoritative list. Any branch row explicitly marked `PhysicalBranch = 0` (including false-equivalent values) is excluded. Metric observations are accepted only when their `BranchCode` belongs to that physical-branch directory; a `PhysicalBranch = 0` field on a metric row is also excluded. Events with an explicit non-physical flag or an unmatched branch code are excluded. These rules apply to overview totals, branch histories, annual averages, rankings, correlations, comparisons, forecasts, map pins, branch search, branch-linked events and CSV endpoints.
+The branch directory is the authoritative list. Any branch row explicitly marked `PhysicalBranch = 0` (including false-equivalent values) is excluded. Metric observations are accepted only when their `BranchCode` belongs to that physical-branch directory; a `PhysicalBranch = 0` field on a metric row is also excluded. Events with an explicit non-physical flag or an unmatched branch code are excluded. These rules apply to overview totals, branch histories, annual totals, rankings, correlations, comparisons, forecasts, map pins, branch search, branch-linked events and CSV endpoints.
 
 The app does not truncate the directory to force a count. It uses every eligible physical branch present in the supplied branch snapshot.
 
@@ -38,16 +38,17 @@ The app does not truncate the directory to force a count. It uses every eligible
 - Annual circulation, visitation, workstation usage and card registration network totals use each measure's latest available reporting year.
 - Service-tier trends show District Library (DL), Neighbourhood Library (NL) and Research and Reference Library (RR), without an extra network series.
 - Correlations use all matched branch-year pairs for each metric pair. The value `r` ranges from -1 to +1 and describes the direction and strength of a linear relationship; it does not establish causation.
-- Top and bottom 10 rankings use each branch's average of its available annual values across all reporting years. Missing observations remain missing rather than being converted to zero.
-- Annual-average metric-versus-floor-area charts use all available years for each branch and are coloured by the three service tiers.
-- The visitation-versus-floor-area quadrant uses average annual visitation and reported floor area. Median splits define four relative groups. These groups describe the relationship between visitation and size, not overall branch quality or service capacity.
-- The map displays physical branch pins. Selecting a metric and reporting year colours the pins by the reported value; pin size reflects reported floor area. Selecting a pin displays available branch attributes and reported services.
+- Each annual activity chart displays the network trend for that measure. The correlation matrix is part of Annual Activity and its hover values show the coefficient `r`, not branch-year records.
+- Top and bottom 10 rankings are grouped into four metric tabs. Within each metric, the two charts rank branches by the total of their reported annual values across the available reporting years. Missing observations remain missing rather than being converted to zero.
+- Annual metric-versus-square-footage charts sum the available annual values for each branch. The chart title names the annual measure and square-footage comparison; the vertical axis is labelled Total. The service-tier legend is placed below the horizontal axis.
+- The visitation-versus-floor-area quadrant has been removed. The map displays physical branch pins; selecting a metric and reporting year changes pin colour based on the reported value. Pin size does not encode the selected metric. Selecting a pin displays available branch attributes and reported services in a scrollable popup.
+- Overview Q&A appears above the activity and location views.
 
 ### Branch insights and forecasts
 
-Branch Insights uses a searchable branch field and tabbed panels for branch information, activity, forecasts, questions and programs. Forecasts use an ARIMA model and produce one annual estimate after the latest available reporting year. At least six consecutive annual observations are required. If the history has gaps or a model cannot be fitted, the app displays a plain-language unavailable state rather than filling gaps or exposing model diagnostics.
+Branch Insights uses a searchable branch field and tabbed panels for branch information, activity, forecasts, questions and programs. The heading shows the library name only. Website information is a clickable link in the branch details. The directory field `PresentSiteYear` is shown as the present-site year; it does not establish whether the branch existed at an earlier location. Forecasts use an ARIMA model and produce one annual estimate after the latest available reporting year. At least six consecutive annual observations are required. If the history has gaps or a model cannot be fitted, the app displays a plain-language unavailable state rather than filling gaps or exposing model diagnostics.
 
-The Relate question flow returns a concise answer and result summaries first. Supporting graph evidence remains collapsed by default.
+The Relate question flow first identifies the intent (annual metric/year, present-site year, services or branch contact detail), inspects the graph schema, and then runs a bounded Cypher query using parameterized values. Questions that do not match a supported intent return a clarification rather than a loose list of branch-name matches; “open now” is not interpreted as an opening-year question. Metric queries filter by the requested `Year` and, in Branch Insights, the exact selected `BranchCode`. Overview metric questions aggregate only records whose branch codes belong to the eligible physical-branch directory. The answer shows a single measure-specific value instead of a generic list of matching branch nodes. The imported graph has separate CSV-derived nodes but no explicit relationships; branch-scoped matching therefore uses the shared `BranchCode` property, not a fabricated relationship.
 
 ### Programs and events
 
@@ -80,7 +81,7 @@ Programs & Events now reads event-like nodes from the embedded Relate graph when
 
 Branch comparisons supplement incomplete Relate annual metrics with the matching physical-branch CSV observations. This is particularly important when one graph import is missing the visitation or workstation node label. Values already present in Relate take precedence; CSV fills missing branch-year values.
 
-The Overview includes an unscoped Relate question form. Branch Insights sends the selected branch code with the question, and the API keeps only graph records that explicitly identify that branch by branch code or branch/location name. It does not present unrelated graph matches as branch-specific answers.
+The Overview includes a Relate question form at the top of the page. Branch Insights sends the selected branch code with the question. The Q&A service resolves supported question types to specific discovered labels and properties, filters by branch code and year where applicable, and returns a curated answer. It does not treat keyword matches on a branch-name node as an answer to a metric question.
 
 
 The interface uses a horizontal civic-information masthead and restrained, rule-based sectioning rather than a side-rail dashboard or repeated bordered cards. Overview analysis and branch Q&A are separate from the metric and location views. Event filter options are taken from Relate when the graph event schema is available, with CSV fallback.

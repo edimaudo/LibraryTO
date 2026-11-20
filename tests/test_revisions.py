@@ -233,3 +233,146 @@ def test_program_finder_reads_relate_event_nodes(snapshots, monkeypatch):
     assert result["total"] == 1
     assert result["events"][0]["start"] == "2099-03-06 14:00"
     assert result["events"][0]["end"] == "2099-03-06 16:00"
+
+
+def _mock_relate_for_questions(monkeypatch, graph_path, nodes_by_label, query_log):
+    import sys
+    from app.services import relate as relate_service
+
+    graph_path.write_bytes(b"read-only graph placeholder")
+    monkeypatch.setattr(relate_service, "RELATE_FILE", graph_path)
+    labels = list(nodes_by_label)
+    schema_rows = []
+    for label, rows in nodes_by_label.items():
+        if rows:
+            schema_rows.extend({"nodeLabels": [label], "propertyName": key} for key in rows[0])
+
+    class Cursor:
+        def __init__(self, rows):
+            self.rows = rows
+        def fetchall(self):
+            return self.rows
+
+    class Connection:
+        def execute(self, statement, params=None):
+            params = params or {}
+            query_log.append((statement, dict(params)))
+            if "CALL db.labels()" in statement:
+                return Cursor([{"label": label} for label in labels])
+            if "CALL db.schema.nodeTypeProperties()" in statement:
+                return Cursor(schema_rows)
+            for label, rows in nodes_by_label.items():
+                if f"MATCH (n:`{label}`)" not in statement:
+                    continue
+                selected = rows
+                if "branch_code" in params:
+                    selected = [row for row in selected if str(row.get("BranchCode", "")).casefold() == params["branch_code"]]
+                if "year" in params:
+                    selected = [row for row in selected if str(row.get("Year", "")) == params["year"]]
+                return Cursor([{"properties": row} for row in selected[:1000]])
+            raise AssertionError(f"Unexpected Relate query: {statement}")
+        def close(self):
+            pass
+
+    class RelateModule:
+        @staticmethod
+        def connect(database, read_only=True):
+            assert read_only is True
+            assert str(database) == str(graph_path)
+            return Connection()
+
+    monkeypatch.setitem(sys.modules, "relate", RelateModule)
+    return relate_service
+
+
+def test_relate_workstation_question_uses_selected_branch_and_year(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "PresentSiteYear": 1990},
+        ],
+        "WorkstationUsageAnnualByBranch": [
+            {"BranchCode": "P1", "Year": 2014, "Sessions": 834, "PhysicalBranch": 1},
+            {"BranchCode": "V1", "Year": 2014, "Sessions": 999999, "PhysicalBranch": 0},
+        ],
+    }
+    calls = []
+    relate_service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+    result = relate_service.ask("What was the workstation usage in 2014?", "P1")
+    assert result["status"] == "ok", result
+    assert result["answer"] == "In 2014, Physical One recorded 834 workstation sessions."
+    assert result["highlights"][0]["details"][-1] == {"label": "Reported total", "value": "834"}
+    assert result["scope_verified"] is True
+    metric_query = next((statement, params) for statement, params in calls if "WorkstationUsageAnnualByBranch" in statement)
+    assert "n.`BranchCode`" in metric_query[0]
+    assert metric_query[1] == {"branch_code": "p1", "year": "2014"}
+    assert all("999999" not in str(item) for item in result["highlights"])
+
+
+def test_relate_network_metric_question_sums_physical_branches_only(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "PresentSiteYear": 1990},
+        ],
+        "WorkstationUsageAnnualByBranch": [
+            {"BranchCode": "P1", "Year": 2014, "Sessions": 834, "PhysicalBranch": 1},
+            {"BranchCode": "V1", "Year": 2014, "Sessions": 999999, "PhysicalBranch": 0},
+        ],
+    }
+    calls = []
+    relate_service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+    result = relate_service.ask("What was the workstation usage in 2014?")
+    assert result["status"] == "ok", result
+    assert result["answer"] == "In 2014, Toronto Public Library recorded 834 workstation sessions across 1 physical branch."
+    metric_query = next((statement, params) for statement, params in calls if "WorkstationUsageAnnualByBranch" in statement)
+    assert "branch_code" not in metric_query[1]
+    assert metric_query[1] == {"year": "2014"}
+
+
+def test_relate_first_opened_question_uses_present_site_year_not_branch_name(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "PresentSiteYear": 1990},
+        ],
+    }
+    calls = []
+    relate_service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+    result = relate_service.ask("When was the branch first opened?", "P1")
+    assert result["status"] == "ok", result
+    assert "1990 as the present-site year" in result["answer"]
+    assert "does not state when the branch first opened" in result["answer"]
+    assert result["highlights"][0]["details"] == [{"label": "Present site year", "value": "1990"}]
+    assert all("MATCH (n:`BranchGeneralInformation`)" in statement for statement, _ in calls if "MATCH" in statement)
+
+
+def test_ask_route_preserves_direct_answer_details(snapshots, monkeypatch):
+    import main
+    expected = {
+        "status": "ok", "answer": "In 2014, Physical One recorded 834 workstation sessions.",
+        "highlights": [{"title": "Annual Workstation Usage", "category": "Annual measure", "details": [
+            {"label": "Branch", "value": "Physical One"}, {"label": "Reporting year", "value": "2014"},
+            {"label": "Reported total", "value": "834"},
+        ]}],
+        "evidence": [], "direct_intent": True, "scope_verified": True,
+    }
+    monkeypatch.setattr(main, "relate_ask", lambda question, branch_code: expected)
+    result = main.branch_question(main.AskRequest(question="What was workstation usage in 2014?", branch_code="P1"))
+    assert result["answer"] == expected["answer"]
+    assert result["highlights"] == expected["highlights"]
+
+
+def test_opening_year_intent_does_not_match_open_now_question(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "PresentSiteYear": 1990},
+        ],
+    }
+    calls = []
+    relate_service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+    result = relate_service.ask("Is this branch open today?", "P1")
+    assert result["status"] == "no_match"
+    assert result["highlights"] == []
+    assert not any("MATCH (n:`BranchGeneralInformation`)" in statement for statement, _ in calls)

@@ -130,3 +130,19 @@ body{background:var(--page)}
   .nav-link{font-size:.78em;padding-inline:.55rem}
   .nav-link.active{padding-left:.55rem}
 }
+
+/* Larger, easier-to-read location popups for detailed branch records. */
+.leaflet-popup-content-wrapper{border-radius:2px;box-shadow:0 3px 16px rgba(0,0,0,.2)}
+.leaflet-popup-content{width:min(390px,calc(100vw - 104px))!important;max-height:min(56vh,460px);overflow-y:auto;overscroll-behavior:contain;margin:14px 16px}
+.map-popup{width:100%;max-width:none;max-height:none;overflow:visible;font-size:13px;line-height:1.55}
+.map-popup strong{font-size:16px;margin-bottom:.55rem}
+.map-popup p{margin:.38rem 0;overflow-wrap:anywhere}
+.map-popup ul{margin:.25rem 0 .4rem;padding-left:1.15rem}
+.map-popup a{overflow-wrap:anywhere}
+.rank-chart-section{margin:1.4rem 0 2.2rem;padding:1rem 0 1.25rem;border-top:1px solid var(--line)}
+.rank-chart-section h3{margin:0 0 .3rem;font-size:1.02em;font-weight:650}
+.rank-chart-section .chart-wrap{min-height:390px}
+.overview-question{margin:0 0 1.8rem;padding:0 0 1.35rem;border-top:0;border-bottom:1px solid var(--line)}
+.correlation-section{margin-top:1.8rem}
+.footprint-panel .chart-wrap{padding-bottom:1.2rem}
+@media(max-width:560px){.leaflet-popup-content{width:calc(100vw - 100px)!important;max-height:52vh;margin:12px}.rank-chart-section .chart-wrap{min-height:350px}}
