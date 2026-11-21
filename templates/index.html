@@ -50,7 +50,11 @@
           </div>
         </div>
         <section id="page-content" aria-busy="true">
+          {% if active == 'branches' %}
+          <div class="loading-state" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>Loading branch directory…</span></div>
+          {% else %}
           <p class="loading-line">Loading LibraryTO…</p>
+          {% endif %}
         </section>
       </main>
     </div>

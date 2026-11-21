@@ -24,7 +24,7 @@ app = FastAPI(title="LibraryTO", version="1.1.0", description="Explore Toronto P
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 # Bump on source changes because static assets are served with immutable caching.
-STATIC_VERSION = "20261121-2"
+STATIC_VERSION = "20261121-3"
 
 
 class AskRequest(BaseModel):

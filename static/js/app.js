@@ -56,6 +56,9 @@ async function request(url, options={}) {
 }
 function note(message, type='') { return `<p class="notice ${type}" role="status">${esc(message)}</p>`; }
 function empty(message) { return `<p class="empty-state">${esc(message)}</p>`; }
+function loadingMarkup(message, extraClass='') {
+  return `<div class="loading-state ${esc(extraClass)}" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>${esc(message)}</span></div>`;
+}
 function safeUrl(value) { try { const u=new URL(value); return ['https:','http:'].includes(u.protocol)?u.href:''; } catch(_){return '';} }
 function metricName(key) { return METRICS[key] || key; }
 function tierName(code) { return TIERS[code] || 'Other'; }
@@ -126,12 +129,16 @@ async function drawCharts(scope=document) {
   if (!elements.length) return;
   try {
     const Plotly=await ensurePlotly();
-    for (const element of elements) {
-      const spec=charts.get(element.id); if (!spec || !element.isConnected) continue;
+    await Promise.all(elements.map(async element=>{
+      const spec=charts.get(element.id); if (!spec || !element.isConnected) return;
       element.dataset.drawn='1';
-      Plotly.newPlot(element,spec.traces,chartLayout(spec),{responsive:true,displaylogo:false,scrollZoom:false,
-        modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d']}).catch(()=>{element.dataset.drawn='0';element.textContent='Chart unavailable.';});
-    }
+      try {
+        await Plotly.newPlot(element,spec.traces,chartLayout(spec),{responsive:true,displaylogo:false,scrollZoom:false,
+          modeBarButtonsToRemove:['lasso2d','select2d','autoScale2d']});
+      } catch (_) {
+        element.dataset.drawn='0';element.textContent='Chart unavailable.';
+      }
+    }));
   } catch (_) { elements.forEach(el=>{el.textContent='Charts could not be loaded.';}); }
 }
 document.addEventListener('libraryto:themechange',()=>{
@@ -150,7 +157,12 @@ function attachTabs(scope=document, afterChange=()=>{}) {
       $$('.tab',tablist).forEach(t=>{const active=t===tab;t.setAttribute('aria-selected',active?'true':'false');t.tabIndex=active?0:-1;});
       const prefix=group.replace(/\W/g,'-');
       $$(`[id^="${prefix}-panel-"]`,scope).forEach(panel=>{panel.hidden=panel.id!==`${prefix}-panel-${index}`;});
-      const panel=$(`#${prefix}-panel-${index}`,scope); if(panel){drawCharts(panel);afterChange(panel,index);}
+      const panel=$(`#${prefix}-panel-${index}`,scope);
+      if(panel){
+        const followUp=afterChange(panel,index);
+        if(followUp&&typeof followUp.then==='function')followUp.catch(()=>{});
+        else drawCharts(panel);
+      }
     };
     tablist.addEventListener('click',e=>{const tab=e.target.closest('.tab');if(tab)activate(tab);});
     tablist.addEventListener('keydown',e=>{
@@ -189,7 +201,7 @@ function correlations(data) {
     let numerator=0,da=0,db=0;av.forEach((v,i)=>{const x=v-ma,y=bv[i]-mb;numerator+=x*y;da+=x*x;db+=y*y;});
     row.push(da&&db?numerator/Math.sqrt(da*db):null);
   });z.push(row);});
-  return chart('Metric correlation', [{type:'heatmap',x:keys.map(k=>METRICS[k]),y:keys.map(k=>METRICS[k]),z,zmin:-1,zmax:1,zmid:0,colorscale:'RdBu',reversescale:true,hovertemplate:'%{y} × %{x}<br>r: %{z:.2f}<extra></extra>',colorbar:{title:'r'}}],{height:420,margin:{l:180,r:65,t:65,b:130},xaxis:{tickangle:-25},yaxis:{autorange:'reversed'},showlegend:false});
+  return chart('Correlation', [{type:'heatmap',x:keys.map(k=>METRICS[k]),y:keys.map(k=>METRICS[k]),z,zmin:-1,zmax:1,zmid:0,colorscale:'RdBu',reversescale:true,hovertemplate:'%{y} × %{x}<br>Pearson correlation: %{z:.2f}<extra></extra>',colorbar:{title:'Pearson correlation'}}],{height:460,margin:{l:180,r:85,t:65,b:185},xaxis:{tickangle:-25,automargin:true,tickfont:{size:10}},yaxis:{autorange:'reversed',automargin:true},showlegend:false});
 }
 function branchTotals(data,metric) {
   const totals=new Map(),counts=new Map();
@@ -279,8 +291,8 @@ async function renderOverview() {
   const metrics=Object.keys(METRICS);
   const stats=metrics.map(key=>`<article class="stat"><span>${esc(METRICS[key])}</span><strong>${fmt(data.totals?.[key])}</strong><small>${data.latest_years?.[key]?`Latest report: ${esc(data.latest_years[key])}`:'No values reported'}</small></article>`).join('')+`<article class="stat"><span>Physical branches</span><strong>${fmt(data.branch_count)}</strong><small>Library locations</small></article>`;
   const activity=metrics.map(key=>`<article class="activity-chart">${chart(METRICS[key],[lineTrace(data.trend?.[key]||[],METRICS[key],'#286b83')],{height:300})}</article>`).join('');
-  const correlationText="r is Pearson's correlation coefficient, which describes the direction and strength of a linear relationship between two measures. Each value of r describes how two measures move together across matching branch and year records. Values close to 1 indicate a strong positive relationship; values close to -1 indicate a strong negative relationship; values near 0 indicate little linear relationship. A relationship does not establish cause.";
-  const correlation=`<section class="analysis-section correlation-section"><h2>Metric correlation</h2>${correlations(data)}<p class="small-note correlation-explanation"><strong>Understanding r.</strong> ${esc(correlationText)}</p></section>`;
+  const correlationText="It describes the direction and strength of a linear relationship between two measures. Values close to 1 indicate a strong positive relationship; values close to -1 indicate a strong negative relationship; values near 0 indicate little linear relationship.";
+  const correlation=`<section class="analysis-section correlation-section"><h2>Pearson correlation</h2>${correlations(data)}<p class="small-note correlation-explanation">${esc(correlationText)}</p></section>`;
   const tiers=serviceTierCharts(data);
   const footprint=footprintCharts(data);
   const locations=`<div class="map-toolbar"><label for="map-metric-select">Metrics</label><select class="control" id="map-metric-select">${metrics.map(k=>`<option value="${k}">${esc(METRICS[k])}</option>`).join('')}</select><label for="map-year-select">Year</label><select class="control" id="map-year-select">${renderYearOptions(years,selected)}</select></div><div id="branch-map" class="map" role="region" aria-label="Map of Toronto Public Library physical branches"></div><div class="map-legend" aria-label="Metric value legend"><span>Lower metric value</span><span class="map-legend-ramp" aria-hidden="true"></span><span>Higher metric value</span></div>`;
@@ -294,7 +306,7 @@ async function renderOverview() {
     `<section id="overview-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-3" hidden><section class="location-section">${locations}</section></section>`
   ].join('');
   host.innerHTML=`
-    <section class="overview-question analysis-section"><h2>Ask a question</h2><form id="overview-question-form" class="question-form"><label for="overview-question">Ask across physical branches or name one</label><div class="question-controls"><input id="overview-question" class="control" type="text" maxlength="500" required placeholder="Ask about any branch, its details, services, facilities or activity"><button class="button" type="submit">Ask</button></div></form><div id="overview-answer" aria-live="polite"></div></section>
+    <section class="overview-question analysis-section"><h2>Ask a question</h2><form id="overview-question-form" class="question-form"><label class="visually-hidden" for="overview-question">Your question</label><div class="question-controls"><input id="overview-question" class="control" type="text" maxlength="500" required placeholder="Ask about any branch, its details, services, facilities or activity"><button class="button" type="submit">Ask</button></div></form><div id="overview-answer" aria-live="polite"></div></section>
     <section class="stats-grid" aria-label="Annual network summary">${stats}</section>
     ${tabsMarkup(['Annual activity','Service tiers','Branch analysis','Location'],'overview')}${panels}`;
   attachTabs(host,(panel,index)=>{
@@ -312,25 +324,49 @@ function branchPicker(branches,initial) {
   input.addEventListener('change',load);input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();load();}});
   if(initial){const branch=branches.find(b=>b.code===initial);if(branch)loadProfile(initial);}
 }
+let branchProfileSequence=0;
 async function loadProfile(code) {
   const pane=$('#branch-profile');if(!pane)return;
+  const sequence=++branchProfileSequence;
+  pane.setAttribute('aria-busy','true');
+  pane.innerHTML=loadingMarkup('Loading branch information…','profile-loading-state');
   try {
     const [detail,forecast]=await Promise.all([request(`/branches/${encodeURIComponent(code)}`),request(`/branches/${encodeURIComponent(code)}/forecasts`)]);
+    if(sequence!==branchProfileSequence||!pane.isConnected)return;
     const b=detail.branch;
     const info=[['Address',b.address],['Postal code',b.postal_code],['Type of library',b.type_of_library||b.service_tier],['Present site year',b.year_opened],['Service tier',b.service_tier],['Area',`${fmt(b.square_footage)} sq ft`],['Workstations',fmt(b.workstations)],['Telephone',b.telephone],['Website',b.website?safeUrl(b.website):'']].map(([label,value])=>label==='Website'&&value? [label,{html:`<a href="${esc(value)}" target="_blank" rel="noopener noreferrer">${esc(value)}</a>`}]:[label,value]);
     const services=(b.services||[]).map(x=>`<li>${esc(x)}</li>`).join('')||'<li>No services are listed in the source data.</li>';
     const activity=Object.keys(METRICS).map(key=>`<article class="panel">${chart(METRICS[key],[lineTrace(detail.history?.[key]||[],METRICS[key],'#0072B2')])}</article>`).join('');
     const predictions=Object.keys(METRICS).map(key=>{const f=forecast[key];const label=METRICS[key];if(!f?.available)return `<article class="panel">${empty(f?.reason||'A forecast is not available.')}</article>`;const history=detail.history?.[key]||[];const past=history.map(p=>({year:String(p.year),value:Number(p.value)}));const next=f.forecasts||[];const trace=[{type:'scatter',mode:'lines+markers',name:'Reported',x:past.map(p=>p.year),y:past.map(p=>p.value),line:{color:'#0072B2'}},{type:'scatter',mode:'lines+markers',name:'Forecast',x:[...(past.length?[past[past.length-1].year]:[]),...next.map(p=>String(p.year))],y:[...(past.length?[past[past.length-1].value]:[]),...next.map(p=>p.value)],line:{dash:'dash',color:'#D55E00'}}];return `<article class="panel">${chart(`${label}`,trace)}<p class="forecast-value">Forecast for ${esc(next[0].year)}: ${fmtD(next[0].value)}</p></article>`;}).join('');
     const events=(detail.events||[]).slice(0,15).map(eventCard).join('')||empty('No future programs are listed for this branch.');
-    pane.innerHTML=`<header class="profile-heading"><h2>${esc(b.name)}</h2></header>${tabsMarkup(['Branch information','Activity','Forecast','Ask a question','Programs'],'branch')}
+    pane.innerHTML=`<div class="profile-loading-overlay" role="status"><span class="loading-spinner" aria-hidden="true"></span><span>Preparing branch insights…</span></div><div class="profile-render-content"><header class="profile-heading"><h2>${esc(b.name)}</h2></header>${tabsMarkup(['Branch information','Activity','Forecast','Ask a question','Programs'],'branch')}
       <section id="branch-panel-0" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-0"><section class="branch-information"><h3>Branch details</h3>${table(['Detail','Information'],info)}<h3 class="reported-services-heading">Reported services</h3><ul class="service-list">${services}</ul></section></section>
       <section id="branch-panel-1" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-1" hidden><div class="grid-2">${activity}</div></section>
       <section id="branch-panel-2" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-2" hidden><div class="grid-2">${predictions}</div></section>
-      <section id="branch-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-3" hidden><form id="branch-question-form" class="question-form"><label for="branch-question">Ask about ${esc(b.name)}</label><div class="question-controls"><input id="branch-question" class="control" maxlength="500" required placeholder="Ask any question about this branch"><button class="button" type="submit">Ask</button></div></form><div id="branch-answer" aria-live="polite"></div></section><section id="branch-panel-4" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-4" hidden><div class="event-list">${events}</div></section>`;
-    attachTabs(pane);
+      <section id="branch-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-3" hidden><form id="branch-question-form" class="question-form"><label for="branch-question">Ask about ${esc(b.name)}</label><div class="question-controls"><input id="branch-question" class="control" maxlength="500" required placeholder="Ask any question about this branch"><button class="button" type="submit">Ask</button></div></form><div id="branch-answer" aria-live="polite"></div></section><section id="branch-panel-4" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-4" hidden><div class="event-list">${events}</div></section></div>`;
+    const content=$('.profile-render-content',pane);
+    attachTabs(content,async (panel)=>{
+      const pendingCharts=$$('.plotly-chart:not([data-drawn="1"])',panel).some(el=>!el.closest('[hidden]'));
+      if(!pendingCharts){await drawCharts(panel);return;}
+      pane.setAttribute('aria-busy','true');
+      const overlay=document.createElement('div');
+      overlay.className='profile-loading-overlay';
+      overlay.setAttribute('role','status');
+      overlay.innerHTML='<span class="loading-spinner" aria-hidden="true"></span><span>Preparing branch insights…</span>';
+      pane.prepend(overlay);
+      try{await drawCharts(panel);}
+      finally{overlay.remove();pane.setAttribute('aria-busy','false');}
+    });
     bindQuestionForm('#branch-question-form','#branch-question','#branch-answer',code);
     await drawCharts($('#branch-panel-0'));
-  } catch(_){pane.innerHTML=note('Branch information could not be loaded.','error');}
+    if(sequence!==branchProfileSequence||!pane.isConnected)return;
+    $('.profile-loading-overlay',pane)?.remove();
+    pane.setAttribute('aria-busy','false');
+  } catch(_){
+    if(sequence!==branchProfileSequence||!pane.isConnected)return;
+    pane.innerHTML=note('Branch information could not be loaded.','error');
+    pane.setAttribute('aria-busy','false');
+  }
 }
 function bindQuestionForm(formSelector,inputSelector,resultSelector,branchCode=null) {
   const form=$(formSelector);if(!form||form.dataset.bound==='1')return;form.dataset.bound='1';
@@ -348,6 +384,7 @@ function bindQuestionForm(formSelector,inputSelector,resultSelector,branchCode=n
 }
 
 async function renderBranches() {
+  host.innerHTML=loadingMarkup('Loading branch directory…','branch-directory-loading');
   const branches=await request('/branches');
   if(!branches.length){host.innerHTML=empty('Branch information is not available.');return;}
   const selected=new URLSearchParams(location.search).get('branch')||'';

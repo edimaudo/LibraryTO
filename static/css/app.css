@@ -91,7 +91,7 @@ body{background:var(--page)}
 .rank-chart-section h3{margin:0 0 .5rem;font-size:1em;font-weight:600}
 .rank-chart-section .chart-wrap{min-height:390px}
 .ranking-tabs{margin:.8rem 0 .75rem}
-.correlation-explanation{margin-top:1.25rem;max-width:75rem}
+.correlation-explanation{margin:2.4rem 0 0;max-width:75rem;padding-top:1rem;line-height:1.65}
 .footprint-panel .chart-wrap{padding-bottom:.65rem}
 .location-section{padding-top:.25rem}
 .map{border:0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);border-radius:0}
@@ -146,3 +146,18 @@ body{background:var(--page)}
 .correlation-section{margin-top:1.8rem}
 .footprint-panel .chart-wrap{padding-bottom:1.2rem}
 @media(max-width:560px){.leaflet-popup-content{width:calc(100vw - 100px)!important;max-height:52vh;margin:12px}.rank-chart-section .chart-wrap{min-height:350px}}
+
+
+/* Pearson correlation: reserve clear space for the rotated axis labels and explanation. */
+.correlation-section .chart-wrap{margin-bottom:2.75rem}
+.correlation-explanation{display:block;clear:both;margin:3.25rem 0 0;padding:1.5rem 0 0;border-top:1px solid var(--line);max-width:75rem;line-height:1.65}
+@media(max-width:700px){.correlation-section .chart-wrap{margin-bottom:2rem}.correlation-explanation{margin-top:2.5rem;padding-top:1.2rem}}
+
+/* Branch Insights loading feedback for data retrieval and deferred chart rendering. */
+.loading-state{display:flex;align-items:center;gap:.75rem;min-height:4.25rem;padding:1rem 0;color:var(--muted)}
+.loading-spinner{display:inline-block;flex:0 0 auto;width:1.15rem;height:1.15rem;border:2px solid var(--line-strong);border-top-color:var(--accent);border-radius:50%;animation:libraryto-spin .8s linear infinite}
+@keyframes libraryto-spin{to{transform:rotate(360deg)}}
+.profile-host{position:relative;min-height:2rem}
+.profile-host[aria-busy="true"]{min-height:12rem}
+.profile-loading-overlay{position:absolute;inset:0;z-index:5;display:flex;align-items:center;justify-content:center;gap:.75rem;padding:1.25rem;background:var(--page);color:var(--muted)}
+@media(prefers-reduced-motion:reduce){.loading-spinner{animation:none;border-top-color:var(--accent);border-right-color:var(--accent)}}
