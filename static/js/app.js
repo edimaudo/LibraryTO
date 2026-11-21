@@ -279,8 +279,8 @@ async function renderOverview() {
   const metrics=Object.keys(METRICS);
   const stats=metrics.map(key=>`<article class="stat"><span>${esc(METRICS[key])}</span><strong>${fmt(data.totals?.[key])}</strong><small>${data.latest_years?.[key]?`Latest report: ${esc(data.latest_years[key])}`:'No values reported'}</small></article>`).join('')+`<article class="stat"><span>Physical branches</span><strong>${fmt(data.branch_count)}</strong><small>Library locations</small></article>`;
   const activity=metrics.map(key=>`<article class="activity-chart">${chart(METRICS[key],[lineTrace(data.trend?.[key]||[],METRICS[key],'#286b83')],{height:300})}</article>`).join('');
-  const correlationText='Each value r describes how two measures move together across matching branch and year records. Values close to 1 indicate a strong positive relationship; values close to -1 indicate a strong negative relationship. A relationship does not establish cause.';
-  const correlation=`<section class="analysis-section correlation-section"><h2>Metric correlation</h2>${correlations(data)}<p class="small-note correlation-explanation">${esc(correlationText)}</p></section>`;
+  const correlationText="r is Pearson's correlation coefficient, which describes the direction and strength of a linear relationship between two measures. Each value of r describes how two measures move together across matching branch and year records. Values close to 1 indicate a strong positive relationship; values close to -1 indicate a strong negative relationship; values near 0 indicate little linear relationship. A relationship does not establish cause.";
+  const correlation=`<section class="analysis-section correlation-section"><h2>Metric correlation</h2>${correlations(data)}<p class="small-note correlation-explanation"><strong>Understanding r.</strong> ${esc(correlationText)}</p></section>`;
   const tiers=serviceTierCharts(data);
   const footprint=footprintCharts(data);
   const locations=`<div class="map-toolbar"><label for="map-metric-select">Metrics</label><select class="control" id="map-metric-select">${metrics.map(k=>`<option value="${k}">${esc(METRICS[k])}</option>`).join('')}</select><label for="map-year-select">Year</label><select class="control" id="map-year-select">${renderYearOptions(years,selected)}</select></div><div id="branch-map" class="map" role="region" aria-label="Map of Toronto Public Library physical branches"></div><div class="map-legend" aria-label="Metric value legend"><span>Lower metric value</span><span class="map-legend-ramp" aria-hidden="true"></span><span>Higher metric value</span></div>`;
@@ -294,7 +294,7 @@ async function renderOverview() {
     `<section id="overview-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-3" hidden><section class="location-section">${locations}</section></section>`
   ].join('');
   host.innerHTML=`
-    <section class="overview-question analysis-section"><h2>Ask a question</h2><form id="overview-question-form" class="question-form"><label for="overview-question">Question about Toronto Public Library</label><div class="question-controls"><input id="overview-question" class="control" type="text" maxlength="500" required placeholder="Ask about an annual measure, branch or service"><button class="button" type="submit">Ask</button></div></form><div id="overview-answer" aria-live="polite"></div></section>
+    <section class="overview-question analysis-section"><h2>Ask a question</h2><form id="overview-question-form" class="question-form"><label for="overview-question">Ask across physical branches or name one</label><div class="question-controls"><input id="overview-question" class="control" type="text" maxlength="500" required placeholder="Ask about any branch, its details, services, facilities or activity"><button class="button" type="submit">Ask</button></div></form><div id="overview-answer" aria-live="polite"></div></section>
     <section class="stats-grid" aria-label="Annual network summary">${stats}</section>
     ${tabsMarkup(['Annual activity','Service tiers','Branch analysis','Location'],'overview')}${panels}`;
   attachTabs(host,(panel,index)=>{
@@ -306,9 +306,9 @@ async function renderOverview() {
 }
 
 function branchPicker(branches,initial) {
-  host.innerHTML=`<section class="branch-picker"><label for="branch-search">Find a branch</label><input id="branch-search" class="control" type="search" list="branch-options" placeholder="Type a branch name or code" autocomplete="off" value="${esc(branches.find(b=>b.code===initial)?.name||'')}"><datalist id="branch-options">${branches.map(b=>`<option value="${esc(b.name)}" label="${esc(b.code)}"></option>`).join('')}</datalist></section><div id="branch-profile" class="profile-host"></div>`;
+  host.innerHTML=`<section class="branch-picker"><label for="branch-search">Find a branch</label><input id="branch-search" class="control" type="search" list="branch-options" placeholder="Type a branch name" autocomplete="off" value="${esc(branches.find(b=>b.code===initial)?.name||'')}"><datalist id="branch-options">${branches.map(b=>`<option value="${esc(b.name)}"></option>`).join('')}</datalist></section><div id="branch-profile" class="profile-host"></div>`;
   const input=$('#branch-search');
-  const load=()=>{const term=input.value.trim().toLocaleLowerCase();const match=branches.find(b=>b.code.toLowerCase()===term||b.name.toLocaleLowerCase()===term);if(match)loadProfile(match.code);};
+  const load=()=>{const term=input.value.trim().toLocaleLowerCase();const match=branches.find(b=>b.name.toLocaleLowerCase()===term);if(match)loadProfile(match.code);};
   input.addEventListener('change',load);input.addEventListener('keydown',e=>{if(e.key==='Enter'){e.preventDefault();load();}});
   if(initial){const branch=branches.find(b=>b.code===initial);if(branch)loadProfile(initial);}
 }
@@ -326,7 +326,7 @@ async function loadProfile(code) {
       <section id="branch-panel-0" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-0"><section class="branch-information"><h3>Branch details</h3>${table(['Detail','Information'],info)}<h3 class="reported-services-heading">Reported services</h3><ul class="service-list">${services}</ul></section></section>
       <section id="branch-panel-1" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-1" hidden><div class="grid-2">${activity}</div></section>
       <section id="branch-panel-2" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-2" hidden><div class="grid-2">${predictions}</div></section>
-      <section id="branch-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-3" hidden><form id="branch-question-form" class="question-form"><label for="branch-question">Ask about ${esc(b.name)}</label><div class="question-controls"><input id="branch-question" class="control" maxlength="500" required placeholder="Ask about this branch's services, measures or programs"><button class="button" type="submit">Ask</button></div></form><div id="branch-answer" aria-live="polite"></div></section><section id="branch-panel-4" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-4" hidden><div class="event-list">${events}</div></section>`;
+      <section id="branch-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-3" hidden><form id="branch-question-form" class="question-form"><label for="branch-question">Ask about ${esc(b.name)}</label><div class="question-controls"><input id="branch-question" class="control" maxlength="500" required placeholder="Ask any question about this branch"><button class="button" type="submit">Ask</button></div></form><div id="branch-answer" aria-live="polite"></div></section><section id="branch-panel-4" class="tab-panel" role="tabpanel" aria-labelledby="branch-tab-4" hidden><div class="event-list">${events}</div></section>`;
     attachTabs(pane);
     bindQuestionForm('#branch-question-form','#branch-question','#branch-answer',code);
     await drawCharts($('#branch-panel-0'));

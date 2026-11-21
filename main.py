@@ -24,7 +24,7 @@ app = FastAPI(title="LibraryTO", version="1.1.0", description="Explore Toronto P
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 # Bump on source changes because static assets are served with immutable caching.
-STATIC_VERSION = "20261120-3"
+STATIC_VERSION = "20261121-2"
 
 
 class AskRequest(BaseModel):
@@ -294,9 +294,9 @@ def branch_question(payload: AskRequest):
         question = payload.question.strip()
         if payload.branch_code and not any(item["code"].casefold() == payload.branch_code.casefold() for item in branch_records()):
             raise HTTPException(status_code=404, detail="Branch not found.")
-        # The Relate service performs exact BranchCode predicates for a
-        # selected branch. Do not append branch-name keywords: that was the
-        # source of unrelated branch-directory matches in earlier answers.
+        # A supplied branch code is the authoritative Branch Insights scope.
+        # Overview requests omit it and are resolved by branch name/code or
+        # the complete physical-branch directory inside the Relate service.
         answer = relate_ask(question, payload.branch_code)
         if not answer.get("scope_verified"):
             answer = _scope_question_answer(answer, payload.branch_code)

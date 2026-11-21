@@ -376,3 +376,444 @@ def test_opening_year_intent_does_not_match_open_now_question(snapshots, monkeyp
     assert result["status"] == "no_match"
     assert result["highlights"] == []
     assert not any("MATCH (n:`BranchGeneralInformation`)" in statement for statement, _ in calls)
+
+
+def test_overview_oldest_branch_question_compares_all_physical_branches(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "PresentSiteYear": 1900},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "PresentSiteYear": 1888},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "PresentSiteYear": 1700},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    calls = []
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+
+    result = service.ask("What was the oldest branch?")
+
+    assert result["status"] == "ok"
+    assert "1888" in result["answer"]
+    assert "Physical Two" in result["answer"]
+    assert "present-site year" in result["answer"]
+    assert "Virtual One" not in result["answer"]
+    assert result["network_scope"] is True
+    graph_query = next(statement for statement, _ in calls if "MATCH (n:`BranchGeneralInformation`)" in statement)
+    assert "branch_code" not in graph_query
+
+
+def test_selected_branch_question_accepts_created_as_present_site_year_intent(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "PresentSiteYear": 1990},
+        ],
+    }
+    calls = []
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+
+    result = service.ask("When was the branch created?", "P1")
+
+    assert result["status"] == "ok"
+    assert "1990 as the present-site year" in result["answer"]
+    assert "does not state when the branch first opened" in result["answer"]
+    query = next((statement, params) for statement, params in calls if "MATCH (n:`BranchGeneralInformation`)" in statement)
+    assert query[1] == {"branch_code": "p1"}
+
+
+def test_overview_qna_can_rank_all_physical_branches_by_any_directory_field(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "PublicParking": 14, "PublicWashroom": 1, "Hours": "Mon 9 a.m. to 5 p.m."},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "PublicParking": 82, "PublicWashroom": 0, "Hours": "Tue 10 a.m. to 6 p.m."},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "PublicParking": 900, "PublicWashroom": 1, "Hours": "Online"},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    calls = []
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+
+    result = service.ask("Which branch has the most public parking?")
+
+    assert result["status"] == "ok"
+    assert "Physical Two" in result["answer"]
+    assert "82 spaces" in result["answer"]
+    assert "Virtual One" not in result["answer"]
+    assert result["network_scope"] is True
+    query = next((statement, params) for statement, params in calls if "MATCH (n:`BranchGeneralInformation`)" in statement)
+    assert "branch_code" not in query[1]
+
+
+def test_overview_qna_lists_all_physical_branches_with_a_washroom(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "PublicWashroom": 1},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "PublicWashroom": 0},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "PublicWashroom": 1},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("Which branches have a public washroom?")
+
+    assert result["status"] == "ok"
+    assert "Physical One" in result["answer"]
+    assert "Physical Two" not in result["answer"]
+    assert "Virtual One" not in result["answer"]
+
+
+def test_branch_qna_returns_posted_hours_for_named_branch(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Hours": "Mon 9 a.m. to 8:30 p.m.; Sat 9 a.m. to 5 p.m."},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "Hours": "Online"},
+        ],
+    }
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("What are the opening hours for Physical One?")
+
+    assert result["status"] == "ok"
+    assert "Mon 9 a.m. to 8:30 p.m." in result["answer"]
+    assert result["highlights"][0]["title"] == "Physical One"
+
+
+def test_branch_qna_is_locked_to_selected_branch_even_if_question_names_another(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Hours": "Monday 9 to 5"},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "Hours": "Tuesday 10 to 6"},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    calls = []
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+
+    result = service.ask("What are the hours for Physical Two?", "P1")
+
+    assert result["status"] == "ok"
+    assert "Monday 9 to 5" in result["answer"]
+    assert "Tuesday 10 to 6" not in result["answer"]
+    query = next((statement, params) for statement, params in calls if "MATCH (n:`BranchGeneralInformation`)" in statement)
+    assert query[1] == {"branch_code": "p1"}
+
+
+def test_selected_branch_qna_answers_workstation_count_not_annual_sessions(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Workstations": 24},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "Workstations": 90},
+        ],
+        "WorkstationUsageAnnualByBranch": [
+            {"BranchCode": "P1", "Year": 2022, "Sessions": 300, "PhysicalBranch": 1},
+            {"BranchCode": "P2", "Year": 2022, "Sessions": 900, "PhysicalBranch": 1},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("How many workstations does this branch have?", "P1")
+
+    assert result["status"] == "ok"
+    assert "24" in result["answer"]
+    assert "900" not in result["answer"]
+
+
+def test_branch_metric_question_uses_latest_available_year_when_omitted(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1},
+        ],
+        "CirculationAnnualByBranch": [
+            {"BranchCode": "P1", "Year": 2022, "Circulation": 1200, "PhysicalBranch": 1},
+            {"BranchCode": "P1", "Year": 2023, "Circulation": 1350, "PhysicalBranch": 1},
+        ],
+    }
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("What is the circulation for this branch?", "P1")
+
+    assert result["status"] == "ok"
+    assert "In 2023" in result["answer"]
+    assert "1,350" in result["answer"]
+
+
+def test_overview_metric_ranking_uses_latest_common_reporting_year(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1},
+        ],
+        "CirculationAnnualByBranch": [
+            {"BranchCode": "P1", "Year": 2022, "Circulation": 2000, "PhysicalBranch": 1},
+            {"BranchCode": "P2", "Year": 2022, "Circulation": 2100, "PhysicalBranch": 1},
+            {"BranchCode": "P1", "Year": 2023, "Circulation": 2300, "PhysicalBranch": 1},
+            {"BranchCode": "P2", "Year": 2023, "Circulation": 2200, "PhysicalBranch": 1},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("Which branch had the most circulation?")
+
+    assert result["status"] == "ok"
+    assert "In 2023" in result["answer"]
+    assert "Physical One" in result["answer"]
+    assert "2,300" in result["answer"]
+
+
+def test_branch_qna_does_not_answer_live_open_status_from_posted_hours(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Hours": "Mon 9 a.m. to 5 p.m."},
+        ],
+    }
+    calls = []
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+
+    result = service.ask("Is this branch open today?", "P1")
+
+    assert result["status"] == "no_match"
+    assert "does not provide live opening status" in result["answer"]
+    assert not any("MATCH (n:`BranchGeneralInformation`)" in statement for statement, _ in calls)
+
+
+def test_overview_qna_resolves_branch_by_code_and_answers_directory_fields(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Telephone": "416-555-0101"},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "Telephone": "416-555-0102"},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "Telephone": "416-555-0199"},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    calls = []
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+
+    result = service.ask("What is the phone number for branch P2?")
+
+    assert result["status"] == "ok"
+    assert "416-555-0102" in result["answer"]
+    assert result["highlights"][0]["title"] == "Physical Two"
+    query = next((statement, params) for statement, params in calls if "MATCH (n:`BranchGeneralInformation`)" in statement)
+    assert query[1] == {"branch_code": "p2"}
+
+
+def test_overview_qna_recognizes_new_boolean_directory_attributes(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "AccessibleEntrance": "Yes"},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "AccessibleEntrance": "No"},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "AccessibleEntrance": "Yes"},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    calls = []
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+
+    result = service.ask("Which physical branches have an accessible entrance?")
+
+    assert result["status"] == "ok"
+    assert "Physical One" in result["answer"]
+    assert "Physical Two" not in result["answer"]
+    assert "Virtual One" not in result["answer"]
+    query = next((statement, params) for statement, params in calls if "MATCH (n:`BranchGeneralInformation`)" in statement)
+    assert "branch_code" not in query[1]
+
+
+def test_branch_qna_unknown_wording_returns_selected_branch_profile_not_network(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Address": "1 Main St", "Telephone": "416-555-0101", "WardName": "Ward A"},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "Address": "2 Main St", "Telephone": "416-555-0102", "WardName": "Ward B"},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    calls = []
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, calls)
+
+    result = service.ask("Can you give me an overview of this branch?", "P1")
+
+    assert result["status"] == "ok"
+    assert "Physical One" in result["answer"]
+    assert "1 Main St" in result["answer"]
+    assert "Physical Two" not in result["answer"]
+    query = next((statement, params) for statement, params in calls if "MATCH (n:`BranchGeneralInformation`)" in statement)
+    assert query[1] == {"branch_code": "p1"}
+
+
+def test_branch_qna_program_questions_are_restricted_to_selected_branch(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+    from app.services import relate_events
+
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    monkeypatch.setattr(relate_events, "graph_event_records", lambda: [
+        {"title": "Storytime", "start": "2099-03-06 10:00", "branch_code": "P1", "types": "Storytime", "audiences": "Children", "languages": "English", "description": "Reading for children"},
+        {"title": "Computer Workshop", "start": "2099-03-06 11:00", "branch_code": "P2", "types": "Workshop", "audiences": "Adults", "languages": "English", "description": "Computer basics"},
+    ])
+    graph = {"BranchGeneralInformation": [
+        {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1},
+        {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1},
+    ]}
+    _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = relate_service.ask("What programs are available at this branch?", "P1")
+
+    assert result["status"] == "ok"
+    assert "Storytime" in result["answer"]
+    assert "Computer Workshop" not in result["answer"]
+    assert result["highlights"][0]["category"] == "Physical One"
+
+
+def test_overview_qna_counts_branches_in_numeric_ward_without_adding_ward_numbers(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "WardNo": 20},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "WardNo": 20},
+            {"BranchCode": "P3", "BranchName": "Physical Three", "PhysicalBranch": 1, "WardNo": 19},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "WardNo": 20},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+        {"code": "P3", "name": "Physical Three"},
+    ])
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("How many branches are in Ward 20?")
+
+    assert result["status"] == "ok"
+    assert "2 physical branches" in result["answer"]
+    assert "40" not in result["answer"]
+    assert "Virtual One" not in result["answer"]
+
+
+def test_branch_qna_answers_day_specific_posted_hours(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Hours": "Mon 9 a.m. to 8 p.m.; Sat 9 a.m. to 5 p.m.; Sun 12 p.m. to 5 p.m."},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "Hours": "Mon 10 a.m. to 6 p.m.; Sat 10 a.m. to 4 p.m."},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("Is this branch open on Sunday?", "P1")
+
+    assert result["status"] == "ok"
+    assert "Sun 12 p.m. to 5 p.m." in result["answer"]
+    assert "Physical Two" not in result["answer"]
+
+
+def test_overview_qna_lists_branches_with_posted_hours_for_requested_day(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Hours": "Mon 9 a.m. to 8 p.m.; Sun 12 p.m. to 5 p.m."},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "Hours": "Mon 10 a.m. to 6 p.m.; Sat 10 a.m. to 4 p.m."},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "Hours": "Sun 24 hours"},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+    ])
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("Which branches have posted hours on Sunday?")
+
+    assert result["status"] == "ok"
+    assert "Physical One" in result["answer"]
+    assert "Physical Two" not in result["answer"]
+    assert "Virtual One" not in result["answer"]
+
+
+def test_overview_qna_filters_branch_count_by_human_readable_service_tier(snapshots, monkeypatch):
+    from app.services import relate as relate_service
+
+    graph = {
+        "BranchGeneralInformation": [
+            {"BranchCode": "P1", "BranchName": "Physical One", "PhysicalBranch": 1, "Service Tier": "DL"},
+            {"BranchCode": "P2", "BranchName": "Physical Two", "PhysicalBranch": 1, "Service Tier": "NL"},
+            {"BranchCode": "P3", "BranchName": "Physical Three", "PhysicalBranch": 1, "Service Tier": "DL"},
+            {"BranchCode": "V1", "BranchName": "Virtual One", "PhysicalBranch": 0, "Service Tier": "DL"},
+        ],
+    }
+    monkeypatch.setattr(relate_service, "branch_records", lambda: [
+        {"code": "P1", "name": "Physical One"},
+        {"code": "P2", "name": "Physical Two"},
+        {"code": "P3", "name": "Physical Three"},
+    ])
+    service = _mock_relate_for_questions(monkeypatch, snapshots / "tpl_library_graph.rl", graph, [])
+
+    result = service.ask("How many branches are District Libraries?")
+
+    assert result["status"] == "ok"
+    assert "2 physical branches" in result["answer"]
+    assert "Physical Two" not in result["answer"]
+    assert "Virtual One" not in result["answer"]
