@@ -1,0 +1,516 @@
+"""Relate graph exploration, connected-context answers and activity intensity.
+
+All graph content is derived from the CSV snapshots already shipped with LibraryTO.
+No external data provider is queried by this module.
+"""
+from __future__ import annotations
+
+from collections import Counter, defaultdict
+import re
+from typing import Any
+
+from app.config import RELATE_FILE
+from app.services.data_store import branch_records
+
+BRANCH_LABEL_FALLBACK = "BranchGeneralInformation"
+NEIGHBOURHOOD_LABEL = "LibraryNeighbourhood"
+WARD_LABEL = "LibraryWard"
+SERVICE_LABEL = "LibraryService"
+FACILITY_LABEL = "LibraryFacility"
+
+RELATIONSHIP_LABELS = {
+    "HAS_CIRCULATION_RECORD": "Annual circulation records",
+    "HAS_VISITS_RECORD": "Annual visit records",
+    "HAS_WORKSTATION_RECORD": "Annual workstation records",
+    "HAS_REGISTRATION_RECORD": "Annual card registration records",
+    "HOSTS_EVENT": "Programs and events",
+    "IN_NEIGHBOURHOOD": "Neighbourhood membership",
+    "IN_WARD": "Ward membership",
+    "OFFERS_SERVICE": "Reported services",
+    "HAS_FACILITY": "Reported facilities",
+    "HAS_GEOGRAPHY_RECORD": "Neighbourhood geography records",
+}
+
+SERVICE_ALIASES = {
+    "kidsstop": ("kids stop", "kidsstop", "children's stop"),
+    "leadingreading": ("leading reading", "leadingreading"),
+    "clc": ("community led services", "community-led services", "clc"),
+    "dih": ("digital innovation hub", "innovation hub", "dih"),
+    "teencouncil": ("teen council", "teencouncil"),
+    "youthhub": ("youth hub", "youthhub"),
+    "adultliteracyprogram": ("adult literacy program", "adult literacy", "adultliteracyprogram"),
+    "publicwashroom": ("public washroom", "washroom", "restroom", "public bathroom", "public toilet"),
+}
+SERVICE_NAMES = {
+    "kidsstop": "Kids Stop",
+    "leadingreading": "Leading Reading",
+    "clc": "Community-led services",
+    "dih": "Digital Innovation Hub",
+    "teencouncil": "Teen Council",
+    "youthhub": "Youth Hub",
+    "adultliteracyprogram": "Adult Literacy Program",
+    "publicwashroom": "Public washroom",
+}
+METRIC_CONFIG = {
+    "circulation": ("HAS_CIRCULATION_RECORD", "CirculationAnnualByBranch", ("Circulation", "TotalCirculation", "Value"), "circulation"),
+    "visits": ("HAS_VISITS_RECORD", "VisitsAnnualByBranch", ("Visits", "TotalVisits", "Value"), "visits"),
+    "workstations": ("HAS_WORKSTATION_RECORD", "WorkstationUsageAnnualByBranch", ("Sessions", "WorkstationSessions", "WorkstationUsage", "Value"), "sessions"),
+    "registrations": ("HAS_REGISTRATION_RECORD", "CardRegistrationsAnnualByBranch", ("Registrations", "CardRegistrations", "NewRegistrations", "Value"), "registrations"),
+}
+
+
+class GraphUnavailable(RuntimeError):
+    """Raised when the committed Relate store cannot be opened."""
+
+
+def _quote(identifier: str) -> str:
+    if not identifier or any(ord(ch) < 32 for ch in identifier):
+        raise ValueError("Invalid Relate identifier")
+    return "`" + identifier.replace("`", "``") + "`"
+
+
+def _norm(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
+
+
+def _rows(cursor) -> list[dict[str, Any]]:
+    return cursor.fetchall()
+
+
+def open_graph(read_only: bool = True):
+    if not RELATE_FILE.is_file():
+        raise GraphUnavailable(f"The Relate store {RELATE_FILE.name} is missing.")
+    try:
+        import relate
+        return relate.connect(database=str(RELATE_FILE), read_only=read_only)
+    except Exception as exc:
+        raise GraphUnavailable(f"The Relate store could not be opened ({type(exc).__name__}).") from exc
+
+
+def _schema(connection) -> tuple[dict[str, dict[str, str]], list[str]]:
+    properties: dict[str, dict[str, str]] = defaultdict(dict)
+    for row in _rows(connection.execute(
+        "CALL db.schema.nodeTypeProperties() YIELD nodeLabels, propertyName "
+        "RETURN nodeLabels, propertyName LIMIT 2000"
+    )):
+        labels = row.get("nodeLabels") or []
+        if isinstance(labels, str):
+            labels = [labels]
+        key = str(row.get("propertyName") or "")
+        if not key:
+            continue
+        for label in labels:
+            properties[str(label)][_norm(key)] = key
+    types = sorted({str(row.get("relationshipType")) for row in _rows(
+        connection.execute("CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType")
+    ) if row.get("relationshipType")})
+    return dict(properties), types
+
+
+def _branch_label(schema: dict[str, dict[str, str]]) -> tuple[str, dict[str, str]]:
+    for label, props in schema.items():
+        if "branchcode" in props and ("branchname" in props or "name" in props):
+            return label, props
+    raise GraphUnavailable("The Relate store does not contain a recognizable branch directory label.")
+
+
+def _safe_properties(properties: Any) -> dict[str, Any]:
+    if not isinstance(properties, dict):
+        return {}
+    hidden = {"_libraryto_source_key", "_libraryto_source_file"}
+    return {str(k): v for k, v in properties.items() if _norm(k) not in hidden and not str(k).startswith("_") and v not in (None, "")}
+
+
+def _node_summary(labels: list[str], props: dict[str, Any]) -> str:
+    values = {_norm(k): v for k, v in props.items()}
+    label = " ".join(labels)
+    if "LibraryService" in labels:
+        return str(values.get("servicename") or values.get("name") or "Service")
+    if "LibraryFacility" in labels:
+        return str(values.get("facilityname") or values.get("name") or "Facility")
+    if "LibraryNeighbourhood" in labels:
+        name = values.get("name") or "Neighbourhood"
+        number = values.get("neighbourhoodno")
+        return f"{name} (No. {number})" if number else str(name)
+    if "LibraryWard" in labels:
+        name = values.get("name") or "Ward"
+        number = values.get("wardno")
+        return f"{name} (Ward {number})" if number else str(name)
+    if any("circulation" in _norm(v) for v in labels):
+        return f"Circulation · {values.get('year', 'year not supplied')} · {values.get('circulation', values.get('value', 'value not supplied'))}"
+    if any("visits" in _norm(v) for v in labels):
+        return f"Visits · {values.get('year', 'year not supplied')} · {values.get('visits', values.get('value', 'value not supplied'))}"
+    if any("workstation" in _norm(v) for v in labels):
+        return f"Workstation sessions · {values.get('year', 'year not supplied')} · {values.get('sessions', values.get('value', 'value not supplied'))}"
+    if any("registration" in _norm(v) for v in labels):
+        return f"Registrations · {values.get('year', 'year not supplied')} · {values.get('registrations', values.get('value', 'value not supplied'))}"
+    title = next((values.get(k) for k in ("title", "eventtitle", "eventname", "programname", "name") if values.get(k)), None)
+    if title:
+        when = values.get("startdatelocal") or values.get("startdate") or values.get("startdatetime") or ""
+        return f"{title} · {when}" if when else str(title)
+    return str(values.get("name") or values.get("branchname") or label or "Connected record")
+
+
+def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
+    """Return an inspectable summary of the persistent graph and selected branch paths."""
+    connection = open_graph(read_only=True)
+    try:
+        schema, relationship_types = _schema(connection)
+        branch_label, branch_props = _branch_label(schema)
+        node_counts = []
+        for label in sorted(schema):
+            row = connection.execute(f"MATCH (n:{_quote(label)}) RETURN count(n) AS count").single()
+            node_counts.append({"label": label, "count": int((row or {}).get("count") or 0)})
+        relationship_counts = []
+        for rel_type in relationship_types:
+            row = connection.execute(
+                f"MATCH ()-[r:{_quote(rel_type)}]->() RETURN count(r) AS count"
+            ).single()
+            relationship_counts.append({
+                "type": rel_type,
+                "label": RELATIONSHIP_LABELS.get(rel_type, rel_type.replace("_", " ").title()),
+                "count": int((row or {}).get("count") or 0),
+            })
+        eligible = {b["code"].casefold(): b for b in branch_records()}
+        selected = []
+        for code in (branch_codes or [])[:5]:
+            branch = eligible.get(str(code).casefold())
+            if not branch:
+                continue
+            query = (
+                f"MATCH (b:{_quote(branch_label)})-[r]->(n) "
+                f"WHERE toLower(toString(b.{_quote(branch_props['branchcode'])})) = $branch_code "
+                "RETURN type(r) AS relationship_type, labels(n) AS labels, "
+                "properties(n) AS properties, properties(r) AS relationship_properties "
+                "LIMIT 500"
+            )
+            edges = []
+            for row in _rows(connection.execute(query, {"branch_code": branch["code"].casefold()})):
+                labels = [str(v) for v in row.get("labels") or []]
+                props = _safe_properties(row.get("properties"))
+                relation = str(row.get("relationship_type") or "RELATED_TO")
+                edges.append({
+                    "relationship_type": relation,
+                    "relationship_label": RELATIONSHIP_LABELS.get(relation, relation.replace("_", " ").title()),
+                    "target_labels": labels,
+                    "target_title": _node_summary(labels, props),
+                    "properties": props,
+                    "relationship_properties": _safe_properties(row.get("relationship_properties")),
+                })
+            selected.append({"branch_code": branch["code"], "branch_name": branch["name"], "connections": edges})
+        return {
+            "available": True,
+            "store": RELATE_FILE.name,
+            "mode": "single-file",
+            "node_count": sum(item["count"] for item in node_counts),
+            "relationship_count": sum(item["count"] for item in relationship_counts),
+            "node_counts": node_counts,
+            "relationship_counts": relationship_counts,
+            "branches": [{"code": b["code"], "name": b["name"]} for b in branch_records()],
+            "selected": selected,
+        }
+    finally:
+        connection.close()
+
+
+def activity_intensity_payload(branch_codes: list[str] | None = None) -> dict[str, Any]:
+    """Calculate activity per 1,000 sq ft using only existing annual CSV snapshots."""
+    from app.services.analytics import METRICS, overview
+
+    data = overview()
+    selected = {str(code).casefold() for code in (branch_codes or []) if str(code).strip()}
+    branches = [b for b in data["branches"] if not selected or b["code"].casefold() in selected]
+    branch_by_code = {b["code"]: b for b in branches}
+    output: dict[str, Any] = {}
+    for metric, label in METRICS.items():
+        yearly = []
+        for year_row in data.get("annual_values", {}).get(metric, []):
+            per_branch = []
+            total_activity = 0.0
+            total_area = 0.0
+            included = 0
+            for code, branch in branch_by_code.items():
+                value = year_row.get("values", {}).get(code)
+                area = branch.get("square_footage")
+                if value is None or area is None or float(area) <= 0:
+                    continue
+                rate = float(value) / float(area) * 1000.0
+                per_branch.append({"code": code, "name": branch["name"], "activity": float(value), "square_footage": float(area), "per_1000_sq_ft": round(rate, 3)})
+                total_activity += float(value)
+                total_area += float(area)
+                included += 1
+            per_branch.sort(key=lambda item: item["per_1000_sq_ft"], reverse=True)
+            yearly.append({
+                "year": str(year_row["year"]),
+                "network_per_1000_sq_ft": round(total_activity / total_area * 1000.0, 3) if total_area else None,
+                "branches_with_values": included,
+                "branch_values": per_branch,
+            })
+        output[metric] = {"label": label, "unit": "reported annual units per 1,000 sq ft", "years": yearly}
+    return {
+        "scope": "selected branches" if selected else "physical branch network",
+        "denominator": "branch square footage from the supplied branch directory",
+        "metrics": output,
+    }
+
+
+def _service_from_question(question: str) -> str | None:
+    q = _norm(question)
+    found = []
+    for key, aliases in SERVICE_ALIASES.items():
+        if any(_norm(alias) in q for alias in aliases):
+            found.append(key)
+    return found[0] if len(found) == 1 else None
+
+
+def _area_intent(question: str) -> str | None:
+    q = question.casefold()
+    if re.search(r"\bward\b", q):
+        return "ward"
+    if re.search(r"\bneighbou?rhood\b|\bsame area\b", q):
+        return "neighbourhood"
+    return None
+
+
+def _branch_value(props: dict[str, Any], aliases: tuple[str, ...]) -> str:
+    values = {_norm(k): v for k, v in props.items()}
+    return str(next((values.get(_norm(key)) for key in aliases if values.get(_norm(key)) not in (None, "")), "")).strip()
+
+
+def _area_records(connection, area_type: str) -> list[dict[str, Any]]:
+    label = WARD_LABEL if area_type == "ward" else NEIGHBOURHOOD_LABEL
+    rows = _rows(connection.execute(f"MATCH (a:{_quote(label)}) RETURN properties(a) AS properties LIMIT 1000"))
+    return [row.get("properties") or {} for row in rows if isinstance(row.get("properties"), dict)]
+
+
+def _resolve_area(question: str, area_type: str, records: list[dict[str, Any]]) -> tuple[str, str] | None:
+    q = question.casefold()
+    q_compact = _norm(question)
+    if area_type == "ward":
+        match = re.search(r"\bward\s+(?:no\.?\s*)?(\d+)\b", q)
+        if match:
+            return "ward_no", match.group(1)
+        aliases = ("name", "ward_name")
+    else:
+        aliases = ("name", "neighbourhood_name")
+    for record in records:
+        name = _branch_value(record, aliases)
+        if name and (name.casefold() in q or _norm(name) in q_compact):
+            key = "name" if "name" in {_norm(k) for k in record} else aliases[-1]
+            return key, name
+    return None
+
+
+def _metric_intent(question: str) -> tuple[str, str] | None:
+    q = question.casefold()
+    for metric, (rel_type, label, aliases, _) in METRIC_CONFIG.items():
+        words = {
+            "circulation": ("circulation", "checkouts", "borrowing"),
+            "visits": ("visits", "visitation"),
+            "workstations": ("workstation sessions", "workstation usage", "computer sessions", "sessions"),
+            "registrations": ("registrations", "card registrations"),
+        }[metric]
+        if any(re.search(rf"\b{re.escape(word)}\b", q) for word in words):
+            return metric, rel_type
+    return None
+
+
+def answer_connected_question(connection, schema: dict[str, dict[str, str]], question: str, branch: dict[str, Any] | None) -> dict[str, Any] | None:
+    """Answer relationship-dependent questions by traversing real Relate edges.
+
+    Returns None when the question is outside connected-context scope so the
+    existing field/metric Q&A remains the fallback.
+    """
+    if not any(name in schema for name in (NEIGHBOURHOOD_LABEL, WARD_LABEL, SERVICE_LABEL)):
+        return None
+    branch_label, branch_props = _branch_label(schema)
+    q = question.casefold()
+    service_key = _service_from_question(question)
+    area_type = _area_intent(question)
+    metric_intent = _metric_intent(question)
+    mentions_cross_branch = bool(re.search(
+        r"\b(other branches|branches|branch locations|same ward|same neighbourhood|same neighborhood|which branches|how many branches)\b", q
+    ))
+    service_question = service_key is not None or (
+        bool(re.search(r"\b(services|service offerings)\b", q)) and bool(branch or area_type)
+    )
+    if not (area_type or service_question or mentions_cross_branch):
+        return None
+    # The existing metric intent handlers already provide full time-series and
+    # ranking behaviour. Route metrics through graph edges only when the user
+    # explicitly asks for an area/cross-branch comparison.
+    if metric_intent and not area_type and not mentions_cross_branch:
+        return None
+
+    # Resolve a named ward/neighbourhood, or anchor to the branch selected in
+    # Branch Insights / named in Overview Q&A.
+    area_value = None
+    area_property = None
+    area_records = _area_records(connection, area_type) if area_type else []
+    if area_type:
+        resolved = _resolve_area(question, area_type, area_records)
+        if resolved:
+            area_property, area_value = resolved
+        elif not branch:
+            return None
+
+    match_parts = [f"MATCH (peer:{_quote(branch_label)})"]
+    predicates: list[str] = []
+    parameters: dict[str, Any] = {}
+    if area_type:
+        area_label = WARD_LABEL if area_type == "ward" else NEIGHBOURHOOD_LABEL
+        relation = "IN_WARD" if area_type == "ward" else "IN_NEIGHBOURHOOD"
+        if area_value is not None and branch:
+            match_parts.append(
+                f"MATCH (anchor:{_quote(branch_label)})-[:{relation}]->(area:{_quote(area_label)})"
+                f"<-[:{relation}]-(peer)"
+            )
+            predicates.append(f"toLower(toString(anchor.{_quote(branch_props['branchcode'])})) = $anchor_code")
+            parameters["anchor_code"] = branch["code"].casefold()
+            predicates.append(f"toLower(toString(peer.{_quote(branch_props['branchcode'])})) <> $anchor_code")
+        elif area_value is not None:
+            match_parts.append(f"MATCH (peer)-[:{relation}]->(area:{_quote(area_label)})")
+        elif branch:
+            match_parts.append(
+                f"MATCH (anchor:{_quote(branch_label)})-[:{relation}]->(area:{_quote(area_label)})"
+                f"<-[:{relation}]-(peer)"
+            )
+            predicates.append(f"toLower(toString(anchor.{_quote(branch_props['branchcode'])})) = $anchor_code")
+            parameters["anchor_code"] = branch["code"].casefold()
+            predicates.append(f"toLower(toString(peer.{_quote(branch_props['branchcode'])})) <> $anchor_code")
+        if area_value is not None:
+            actual_area_key = "ward_no" if area_type == "ward" and area_property == "ward_no" else "name"
+            predicates.append(f"toLower(toString(area.{_quote(actual_area_key)})) = $area_value")
+            parameters["area_value"] = str(area_value).casefold()
+    elif branch:
+        predicates.append(f"toLower(toString(peer.{_quote(branch_props['branchcode'])})) = $anchor_code")
+        parameters["anchor_code"] = branch["code"].casefold()
+
+    if service_question:
+        relation_type = "HAS_FACILITY" if service_key == "publicwashroom" else "OFFERS_SERVICE"
+        target_label = FACILITY_LABEL if service_key == "publicwashroom" else SERVICE_LABEL
+        target_key = "facility_key" if service_key == "publicwashroom" else "service_key"
+        match_parts.append(f"MATCH (peer)-[:{relation_type}]->(service:{_quote(target_label)})")
+        if service_key:
+            predicates.append(f"toLower(toString(service.{target_key})) = $service_key")
+            parameters["service_key"] = service_key
+
+    metric_name = None
+    if metric_intent:
+        metric_name, rel_type = metric_intent
+        label = METRIC_CONFIG[metric_name][1]
+        metric_properties = schema.get(label, {})
+        value_aliases = {_norm(k) for k in METRIC_CONFIG[metric_name][2]}
+        value_key = next((v for k, v in metric_properties.items() if k in value_aliases), None)
+        year_key = next((v for k, v in metric_properties.items() if k in {"year", "fiscalyear", "calendaryear"}), None)
+        if not value_key or not year_key:
+            return None
+        match_parts.append(f"MATCH (peer)-[:{rel_type}]->(metric:{_quote(label)})")
+        year_match = re.search(r"\b((?:19|20)\d{2})\b", question)
+        if year_match:
+            predicates.append(f"toString(metric.{_quote(year_key)}) = $year")
+            parameters["year"] = year_match.group(1)
+
+    if not area_type and not branch and not service_key:
+        return None
+    where = " WHERE " + " AND ".join(predicates) if predicates else ""
+    query = (
+        " ".join(match_parts) + where +
+        " RETURN properties(peer) AS branch_properties, "
+        + ("properties(area) AS area_properties, " if area_type else "")
+        + ("properties(metric) AS metric_properties, " if metric_name else "[] AS metric_properties, ")
+        + ("properties(service) AS service_properties" if service_question else "[] AS service_properties")
+        + " LIMIT 1000"
+    )
+    try:
+        rows = _rows(connection.execute(query, parameters))
+    except Exception:
+        # Do not break regular Q&A if an older store has not been rebuilt yet.
+        return None
+
+    if service_question and branch and not area_type and not mentions_cross_branch:
+        names = sorted({
+            str((row.get("service_properties") or {}).get("service_name") or (row.get("service_properties") or {}).get("facility_name") or "")
+            for row in rows if isinstance(row.get("service_properties"), dict)
+        } - {""})
+        answer = f"{branch['name']} has these connected services: {', '.join(names)}." if names else f"No connected service records were found for {branch['name']}."
+        return _connected_answer(answer, "Reported services", [{"label": "Service", "value": name} for name in names], rows, branch, False)
+
+    if metric_name:
+        metric_rows = []
+        for row in rows:
+            bp = row.get("branch_properties") or {}
+            mp = row.get("metric_properties") or {}
+            code = _branch_value(bp, ("BranchCode",))
+            name = _branch_value(bp, ("BranchName", "Name")) or code
+            year = _branch_value(mp, ("Year", "FiscalYear", "CalendarYear"))
+            raw = _branch_value(mp, METRIC_CONFIG[metric_name][2])
+            try:
+                value = float(str(raw).replace(",", ""))
+            except (TypeError, ValueError):
+                continue
+            metric_rows.append({"code": code, "name": name, "year": year, "value": value})
+        if not metric_rows:
+            return None
+        asked_year = re.search(r"\b((?:19|20)\d{2})\b", question)
+        chosen_year = asked_year.group(1) if asked_year else max((r["year"] for r in metric_rows if r["year"].isdigit()), key=int, default="")
+        metric_rows = [r for r in metric_rows if not chosen_year or r["year"] == chosen_year]
+        low = bool(re.search(r"\b(lowest|least|fewest|smallest)\b", q))
+        ranking = bool(re.search(r"\b(highest|lowest|most|least|top|rank|ranking)\b", q))
+        metric_rows.sort(key=lambda r: r["value"], reverse=not low if ranking else False)
+        selected = metric_rows[:10 if ranking else 20]
+        label = METRIC_CONFIG[metric_name][3]
+        answer = (
+            f"{len(metric_rows)} branch records in the connected {area_type or 'branch'} scope reported {label} "
+            f"for {chosen_year or 'the available year'}: "
+            + "; ".join(f"{r['name']} ({r['value']:,.0f})" for r in selected) + "."
+        )
+        details = [{"label": r["name"], "value": f"{r['value']:,.0f}"} for r in selected]
+        return _connected_answer(answer, f"Connected {label.title()}", details, rows, branch, not bool(branch))
+
+    if service_question:
+        service_name = SERVICE_NAMES.get(service_key, "reported services")
+        service_branches = sorted({
+            _branch_value(row.get("branch_properties") or {}, ("BranchName", "Name"))
+            for row in rows
+            if _branch_value(row.get("branch_properties") or {}, ("BranchName", "Name"))
+        }, key=str.casefold)
+        if branch and not area_type and not mentions_cross_branch:
+            service_names = sorted({
+                str((row.get("service_properties") or {}).get("service_name") or (row.get("service_properties") or {}).get("facility_name") or "")
+                for row in rows if isinstance(row.get("service_properties"), dict)
+            } - {""})
+            return _connected_answer(
+                f"{branch['name']} has these connected services: {', '.join(service_names) or 'none listed'}.",
+                "Reported services", [{"label": "Service", "value": n} for n in service_names], rows, branch, False
+            )
+        scope = f"in the requested {area_type}" if area_type else "across physical branches"
+        if branch:
+            scope = f"in the {branch['name']} {area_type or 'branch'} context"
+        answer = f"Branches with {service_name} {scope}: " + (", ".join(service_branches) if service_branches else "none found") + "."
+        return _connected_answer(answer, service_name, [{"label": "Branch", "value": n} for n in service_branches], rows, branch, not bool(branch))
+
+    peers = sorted({
+        _branch_value(row.get("branch_properties") or {}, ("BranchName", "Name"))
+        for row in rows
+        if _branch_value(row.get("branch_properties") or {}, ("BranchName", "Name"))
+    }, key=str.casefold)
+    context = "ward" if area_type == "ward" else "neighbourhood"
+    answer = (
+        f"Other physical branches connected to {branch['name']} through its {context}: "
+        if branch else f"Physical branches in the requested {context}: "
+    ) + (", ".join(peers) if peers else "none found") + "."
+    return _connected_answer(answer, f"Branches in {context}", [{"label": "Branch", "value": name} for name in peers], rows, branch, not bool(branch))
+
+def _connected_answer(answer: str, category: str, details: list[dict[str, str]], rows: list[dict[str, Any]], branch: dict[str, Any] | None, network_scope: bool) -> dict[str, Any]:
+    return {
+        "status": "ok",
+        "answer": answer,
+        "highlights": [{"title": branch["name"] if branch else category, "category": category, "details": details[:30]}],
+        "evidence": [],
+        "direct_intent": True,
+        # Branch-specific Q&A can traverse to peer branches in the selected
+        # branch's own ward/neighbourhood. This is still a selected-branch query.
+        "scope_verified": True,
+        "network_scope": network_scope,
+    }

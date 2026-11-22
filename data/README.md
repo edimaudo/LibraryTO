@@ -1,26 +1,33 @@
 # LibraryTO data directory
 
-Place the six CSV source snapshots and the Relate graph file directly in this directory. There are no `source/` or `derived/` subdirectories.
+This directory contains the seven supplied CSV snapshots and the persistent Relate graph used by LibraryTO. No external data source is required by the application or graph builder.
 
-## Exact filenames
+## Source files
 
 | Asset | Filename |
 |---|---|
-| Relate graph | `tpl_library_graph.rl` |
+| Persistent Relate store | `tpl_library_graph.rl` |
 | Branch directory | `tpl-branch-general-information.csv` |
 | Annual circulation | `tpl-circulation-annual-by-branch.csv` |
 | Annual visits | `tpl-visits-annual-by-branch.csv` |
 | Annual workstation usage | `tpl-workstation-usage-annual-by-branch.csv` |
 | Annual card registrations | `tpl-card-registrations-annual-by-branch.csv` |
-| Programs and events feed | `tpl-events-feed.csv` |
+| Programs and events | `tpl-events-feed.csv` |
+| Neighbourhood geography | `tpl-Neighbourhoods.csv` |
 
-The names above are the application contract. Do not rename the files or place them in nested directories.
+Keep these filenames unchanged. Application data loading and graph-building scripts expect them directly under `data/`.
 
-## Runtime behavior
+## Relate graph
 
-- CSVs are read from the project directory and cached in memory for the lifetime of each application process.
-- The Relate store is opened directly from `tpl_library_graph.rl` using `relate-db` in read-only mode.
-- LibraryTO does not create, seed, rewrite or checkpoint the graph file.
-- Add or replace source files and redeploy to publish a new snapshot. Vercel's function filesystem is not treated as persistent storage.
+`tpl_library_graph.rl` is a persistent single-file Relate store. The application opens it in read-only mode. It contains CSV-derived nodes and typed relationships connecting eligible physical branches to annual observations, events, neighbourhoods, wards, services and facilities.
 
-Run `python scripts/validate_data.py` after adding the files. The validator checks exact filenames, expected CSV fields, reporting years and whether the Relate graph file is present.
+The original `Load_relate_db.ipynb` records the initial CSV-to-node import. The current connected graph is rebuilt from the same seven CSV snapshots by running, from the repository root:
+
+```bash
+python scripts/build_relate_graph.py
+python scripts/validate_relate_graph.py
+```
+
+The builder creates and validates a staging `.rl` file before replacing the persistent store. Stop the application before rebuilding so the single-file store is not open by another process.
+
+CSV snapshots are read locally and cached by the application. There are no live API calls or external data refreshes. Rebuild the graph after changing any source snapshot, then commit the regenerated `tpl_library_graph.rl` with the matching CSV changes.

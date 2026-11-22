@@ -1,87 +1,136 @@
-# LibraryTO — updated source overlay
+# LibraryTO
 
-This ZIP contains the updated application source files for the existing `edimaudo/LibraryTO` project. It is intended to be extracted over a fresh checkout of the repository's current `main` branch.
+**LibraryTO turns Toronto Public Library's existing branch, activity and program records into an explorable municipal library intelligence graph.**
 
-**This is an update overlay, not a self-contained data archive.** The existing `data/` directory is deliberately not included. Keep the repository's supplied CSV snapshots, `tpl_library_graph.rl`, templates, deployment configuration, and other unchanged project files. The update adds `app/services/relate_compare.py` and replaces the listed source files.
+## Use case
 
-## Apply the update
+LibraryTO helps library leaders, municipal planners, researchers and the public understand how Toronto Public Library's physical branches are distributed, what services they report, how annual activity changes, and how locations compare with one another.
 
-1. Check out the existing `edimaudo/LibraryTO` repository.
-2. Extract this ZIP into the repository root and allow the updated files to overwrite files with the same paths.
-3. Keep the original `data/` directory in place.
-4. Install the project's requirements and run the tests before deploying.
+The project works with the CSV snapshots already included in this repository. It does not call external data providers, scrape additional information or depend on another database service.
 
-No Git branch is created by this package. No commit is pushed, and no Vercel deployment is triggered.
+The relationships that matter are the connections between a physical branch and its annual activity, programs, neighbourhood, ward, services and facilities. These connections support questions such as:
 
-## Runtime and architecture
+- Which branches in a particular ward offer a Digital Innovation Hub?
+- Which other branches share a selected branch's neighbourhood?
+- How does annual circulation compare across branches in the same ward?
+- Which annual records and services are connected to this branch?
 
-- Python 3.12, FastAPI and Jinja2
-- Vanilla JavaScript and CSS; no Node build step
-- Plotly for interactive charts
-- Leaflet for physical branch maps
-- `relate-db` for the embedded, read-only Relate graph
-- Statsmodels ARIMA for one-step annual branch forecasts
-- Vercel Python Functions for deployment
+## How it uses Relate
 
-The existing graph is a Relate database. It is not Neo4j. The current graph import stores CSV rows as labelled nodes and does not create relationships. The updated comparison adapter reads annual metric nodes from Relate and joins them to the physical branch directory by `BranchCode`. If the graph file, client, or required annual metric nodes are unavailable, the comparison endpoint uses the filtered CSV snapshots instead of presenting an empty or fabricated graph result.
+- **Mode:** Single-file Relate store.
+- **Persistent store:** `data/tpl_library_graph.rl`.
+- **Why this mode:** Relate runs embedded in the Python application, so there is no separate graph server to install or operate. The single-file store is committed with the repository and can be inspected by judges after cloning. The running application opens it read-only. A rebuild script is supplied for maintainers to regenerate the graph from the repository's CSV snapshots.
+- **What the graph models:** CSV-derived branch directory records, annual circulation, visits, workstation-usage and card-registration observations, program/event records, and neighbourhood geography records. Additional relationship nodes for neighbourhoods, wards, services and facilities are derived from the branch directory in the supplied snapshots.
+- **Relationships:**
+  - `HAS_CIRCULATION_RECORD`, `HAS_VISITS_RECORD`, `HAS_WORKSTATION_RECORD` and `HAS_REGISTRATION_RECORD` connect a branch to its corresponding annual records using the source `BranchCode`.
+  - `HOSTS_EVENT` connects a branch to an event-feed row when the row contains a matching `BranchCode` or an unambiguous branch location/name.
+  - `IN_NEIGHBOURHOOD` and `IN_WARD` connect a branch to neighbourhood and ward nodes derived from `NBHDNo`, `NBHDName`, `WardNo` and `WardName` in the branch directory.
+  - `OFFERS_SERVICE` connects a branch to service nodes derived from the existing service flags, including Kids Stop, Leading Reading, Community-led services, Digital Innovation Hub, Teen Council, Youth Hub and Adult Literacy Program.
+  - `HAS_FACILITY` connects a branch to a public-washroom facility node when the source flag is true. Numeric parking counts remain branch properties rather than being converted to a yes/no flag.
+  - `HAS_GEOGRAPHY_RECORD` links a derived neighbourhood to a supplied neighbourhood geometry record when an unambiguous name/number key exists in that CSV.
 
-## Data rules and calculations
+The graph build is reproducible from the committed CSV snapshots: it creates a staging single-file store and uses `MERGE` for typed relationships. The script validates the new graph before replacing the committed store. The original node-only import notebook is retained as a record of the first import; `scripts/build_relate_graph.py` is the complete graph build used by this submission. No additional data source is used.
 
-### Physical branches
+### Graph-powered application features
 
-The branch directory is the authoritative list. Any branch row explicitly marked `PhysicalBranch = 0` (including false-equivalent values) is excluded. Metric observations are accepted only when their `BranchCode` belongs to that physical-branch directory; a `PhysicalBranch = 0` field on a metric row is also excluded. Events with an explicit non-physical flag or an unmatched branch code are excluded. These rules apply to overview totals, branch histories, annual totals, rankings, correlations, comparisons, forecasts, map pins, branch search, branch-linked events and CSV endpoints.
+- **Overview:** network analysis, relationship-aware questions, the Relate Explorer and activity per 1,000 square feet.
+- **Branch Insights:** branch-scoped questions that can traverse to that branch's ward/neighbourhood and related peer branches, the Relate Explorer for the selected branch, and activity intensity by year.
+- **Branch Comparisons:** comparison of selected branches, exploration of each selected branch's connected records, and normalized activity comparisons.
 
-The app does not truncate the directory to force a count. It uses every eligible physical branch present in the supplied branch snapshot.
+The Relate Explorer exposes node labels, node counts, relationship types, relationship counts and the records connected to a selected branch. It is read-only and uses the same committed graph that powers Q&A.
 
-### Overview
+## Setup and run
 
-- Annual circulation, visitation, workstation usage and card registration network totals use each measure's latest available reporting year.
-- Service-tier trends show District Library (DL), Neighbourhood Library (NL) and Research and Reference Library (RR), without an extra network series.
-- Correlations use all matched branch-year pairs for each metric pair. The value `r` ranges from -1 to +1 and describes the direction and strength of a linear relationship; it does not establish causation.
-- Each annual activity chart displays the network trend for that measure. The correlation matrix is part of Annual Activity and its hover values show the coefficient `r`, not branch-year records.
-- Top and bottom 10 rankings are grouped into four metric tabs. Within each metric, the two charts rank branches by the total of their reported annual values across the available reporting years. Missing observations remain missing rather than being converted to zero.
-- Annual metric-versus-square-footage charts sum the available annual values for each branch. The chart title names the annual measure and square-footage comparison; the vertical axis is labelled Total. The service-tier legend is placed below the horizontal axis.
-- The visitation-versus-floor-area quadrant has been removed. The map displays physical branch pins; selecting a metric and reporting year changes pin colour based on the reported value. Pin size does not encode the selected metric. Selecting a pin displays available branch attributes and reported services in a scrollable popup.
-- Overview Q&A appears above the activity and location views.
+### Prerequisites
 
-### Branch insights and forecasts
+- Python 3.12 (Python 3.9+ is required by the Relate Python package; use the project's supported Python 3.12 runtime for the application).
+- Git and a local checkout of this public repository.
 
-Branch Insights uses a searchable branch field and tabbed panels for branch information, activity, forecasts, questions and programs. The heading shows the library name only. Website information is a clickable link in the branch details. The directory field `PresentSiteYear` is shown as the present-site year; it does not establish whether the branch existed at an earlier location. Forecasts use an ARIMA model and produce one annual estimate after the latest available reporting year. At least six consecutive annual observations are required. If the history has gaps or a model cannot be fitted, the app displays a plain-language unavailable state rather than filling gaps or exposing model diagnostics.
+### Install
 
-The Relate question flow first identifies the intent (annual metric/year, present-site year, services or branch contact detail), inspects the graph schema, and then runs a bounded Cypher query using parameterized values. Questions that do not match a supported intent return a clarification rather than a loose list of branch-name matches; “open now” is not interpreted as an opening-year question. Metric queries filter by the requested `Year` and, in Branch Insights, the exact selected `BranchCode`. Overview metric questions aggregate only records whose branch codes belong to the eligible physical-branch directory. The answer shows a single measure-specific value instead of a generic list of matching branch nodes. The imported graph has separate CSV-derived nodes but no explicit relationships; branch-scoped matching therefore uses the shared `BranchCode` property, not a fabricated relationship.
+From the repository root:
 
-### Programs and events
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+```
 
-Audience, language, program type, branch, date, start time, end time and registration status are structured filters; interest is free text. Event timestamps are normalized to `YYYY-MM-DD HH:MM` when a time is supplied. An event is considered upcoming only if its start timestamp can be parsed and is today or later in the Toronto timezone. Invalid and past event timestamps are not presented as upcoming programs.
+### Rebuild the graph with explicit relationships
 
-Event recommendations describe only the supplied event-feed metadata. They do not infer attendance, popularity, demand or program effectiveness.
+The repository's `data/Load_relate_db.ipynb` documents the original CSV-to-node import. The connected graph used by the current application is built by the following script (also demonstrated in `data/Build_relate_relationships.ipynb`):
 
-## Performance, deployment and accessibility
+```bash
+python scripts/build_relate_graph.py
+python scripts/validate_relate_graph.py
+```
 
-- CSV files and derived calculations are cached in-process. Only the datasets needed by the selected view are loaded on initial requests.
-- Successful GET responses are cached in the browser for five minutes; stale cached data may be shown while a refresh runs for up to thirty minutes.
-- Plotly and Leaflet are loaded on demand. Charts inside inactive tabs are drawn when their tab becomes visible.
-- The interface uses responsive layouts, keyboard-operable tabs, visible focus, semantic labels, reduced-motion support and 44-pixel minimum control targets. Light/dark mode and text scaling controls share dimensions.
-- This is an accessibility-focused implementation, not a claim of audited WCAG conformance. Complete WCAG 2.2 AA validation still requires manual keyboard, screen-reader, contrast, zoom/reflow and mobile testing with real browser rendering.
+The builder reads only the seven CSV files already in `data/`, creates a staging `.rl` file, validates its nodes and relationship types, then replaces `data/tpl_library_graph.rl`. It saves the prior graph as `tpl_library_graph.pre-relationships.bak` in the operating system's temporary directory. Stop the application before rebuilding so the single-file store is not open elsewhere.
+
+### Start the application
+
+```bash
+uvicorn main:app --reload
+```
+
+Open `http://127.0.0.1:8000`.
+
+### First result to try
+
+1. Open **Overview** and ask: `Which branches in Ward 1 offer a Digital Innovation Hub?`
+2. Open **Branch Insights**, select a branch and ask: `Which other branches share this neighbourhood?`
+3. Open **Branch Comparisons**, select two or more branches and use **Relate Explorer** to inspect each branch's connected annual records, ward, neighbourhood and services.
+4. In the activity-intensity panel, compare annual visits or circulation per 1,000 square feet.
+
+## Where the data lives
+
+All source snapshots and the persistent Relate store are in the repository's `data/` directory:
+
+| File | Contents |
+|---|---|
+| `data/tpl_library_graph.rl` | Persistent single-file Relate graph used by the application |
+| `data/tpl-branch-general-information.csv` | Branch directory, physical-branch flags, addresses, service flags, floor area, neighbourhood, ward and present-site year |
+| `data/tpl-circulation-annual-by-branch.csv` | Annual circulation by branch |
+| `data/tpl-visits-annual-by-branch.csv` | Annual visits by branch |
+| `data/tpl-workstation-usage-annual-by-branch.csv` | Annual workstation sessions by branch |
+| `data/tpl-card-registrations-annual-by-branch.csv` | Annual card registrations by branch |
+| `data/tpl-events-feed.csv` | Programs and events feed |
+| `data/tpl-Neighbourhoods.csv` | Neighbourhood geography records |
+| `data/Load_relate_db.ipynb` | Original CSV-to-Relate node import notebook |
+
+The application excludes records explicitly marked `PhysicalBranch = 0` from physical-branch analysis and only associates annual metric records with eligible physical branch codes. The `PresentSiteYear` field refers to the current site, not necessarily the original founding date of the library service.
+
+## Activity intensity
+
+LibraryTO calculates annual activity per 1,000 square feet using the existing annual measure and branch floor-area fields:
+
+\[
+\text{Activity per 1,000 sq ft} = \frac{\text{Annual activity}}{\text{Branch square footage}} \times 1,000
+\]
+
+The network-level rate uses total annual activity divided by the combined floor area of branches with a reported value for that year. Branch-level rates are available in Branch Insights and Branch Comparisons. This is a size-normalized activity measure; it is not a measure of operational efficiency or service quality.
 
 ## Verification
 
-Run from the repository root:
-
 ```bash
-python3.12 -m pip install -r requirements-dev.txt
 python scripts/validate_data.py
+python scripts/validate_relate_graph.py
 python -m pytest -q
 ```
 
+The status endpoint reports dataset and graph readiness:
 
-## Relate-backed event retrieval and current result limits
+```bash
+curl http://127.0.0.1:8000/status
+```
 
-Programs & Events now reads event-like nodes from the embedded Relate graph when its discovered schema contains event title and start-date/time fields. The graph query remains read-only and uses discovered, quoted schema identifiers. Event filters are evaluated against supplied branch, audience, language, program type, date, time and registration fields. Only future-dated records with a parseable start time are eligible. The interface displays at most 10 matching programs; the displayed count refers to the rows shown, not the total number of records in the underlying graph. If the graph file, Relate package or event node schema is unavailable, the normalized CSV event feed remains the fallback.
+The Relate Explorer data endpoint is available at `/relate/explorer`; activity intensity is available at `/activity-intensity`. Both endpoints use the application's local files and do not contact third-party data sources.
 
-Branch comparisons supplement incomplete Relate annual metrics with the matching physical-branch CSV observations. This is particularly important when one graph import is missing the visitation or workstation node label. Values already present in Relate take precedence; CSV fills missing branch-year values.
+## Known data coverage
 
-The Overview includes a Relate question form at the top of the page. Branch Insights sends the selected branch code with the question. The Q&A service resolves supported question types to specific discovered labels and properties, filters by branch code and year where applicable, and returns a curated answer. It does not treat keyword matches on a branch-name node as an answer to a metric question.
+The supplied annual CSV snapshots currently end in 2024 for circulation, visits and card registrations, and 2023 for workstation sessions. There are no 2025 or 2026 annual observations in the supplied records, so LibraryTO does not claim to have measured activity or forecast accuracy for those missing years. Forecasting remains a one-step estimate based on the historical observations that are actually available.
 
+## Deployment
 
-The interface uses a horizontal civic-information masthead and restrained, rule-based sectioning rather than a side-rail dashboard or repeated bordered cards. Overview analysis and branch Q&A are separate from the metric and location views. Event filter options are taken from Relate when the graph event schema is available, with CSV fallback.
+The FastAPI application is configured for Vercel Python Functions. The Relate file and source CSV snapshots are included through the existing `data/**` deployment configuration. The runtime opens the `.rl` file read-only; graph rebuilds are a local maintenance operation, followed by committing the regenerated store with the source update.
