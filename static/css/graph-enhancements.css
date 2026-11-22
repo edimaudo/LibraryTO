@@ -36,3 +36,19 @@
 .graph-root-node span, .graph-root-node small { color:var(--muted, #64748b); font-size:.82rem; }
 .graph-root-node strong { font-size:1.05rem; }
 @media (max-width:700px) { .graph-summary-tables { grid-template-columns:1fr; } }
+
+/* Inspectable node details in Relate Explorer */
+.graph-branch-properties{margin:1rem 0 1.5rem;}
+.graph-property-table th{width:34%;font-weight:600;}
+.graph-property-table td{overflow-wrap:anywhere;}
+.graph-node-list{display:grid;gap:.55rem;}
+.graph-node-details{border-bottom:1px solid var(--line);padding:.65rem 0;}
+.graph-node-details summary{display:grid;grid-template-columns:minmax(9rem,auto) 1fr;gap:.2rem .8rem;align-items:center;cursor:pointer;}
+.graph-node-details summary strong{font-weight:600;}
+.graph-node-details summary small{grid-column:2;color:var(--muted);}
+.graph-node-inspection{padding:.75rem 0 .25rem 1rem;}
+.graph-node-inspection h5{margin:.5rem 0;font-size:.9rem;}
+.branch-size-heading{display:flex;align-items:end;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin-bottom:.5rem;}
+.branch-size-heading h3{margin:0;}
+.branch-size-heading .form-field{min-width:10rem;max-width:14rem;margin:0;}
+@media (max-width:640px){.branch-size-heading{align-items:stretch;}.branch-size-heading .form-field{max-width:none;width:100%;}}

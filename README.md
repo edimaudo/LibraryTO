@@ -33,11 +33,11 @@ The graph build is reproducible from the committed CSV snapshots: it creates a s
 
 ### Graph-powered application features
 
-- **Overview:** network analysis, relationship-aware questions, the Relate Explorer and activity per 1,000 square feet.
-- **Branch Insights:** branch-scoped questions that can traverse to that branch's ward/neighbourhood and related peer branches, the Relate Explorer for the selected branch, and activity intensity by year.
+- **Overview:** network-wide questions, branch rankings across the full available reporting period, per-metric Top 10/Bottom 10 cumulative rankings, one year-specific annual activity-versus-branch-size chart inside each metric subtab, the Relate Explorer and activity per 1,000 square feet.
+- **Branch Insights:** branch-scoped questions that traverse to the selected branch's ward/neighbourhood and related peer branches, the Relate Explorer for the selected branch, and annual activity intensity by year.
 - **Branch Comparisons:** comparison of selected branches, exploration of each selected branch's connected records, and normalized activity comparisons.
 
-The Relate Explorer exposes node labels, node counts, relationship types, relationship counts and the records connected to a selected branch. It is read-only and uses the same committed graph that powers Q&A.
+The Relate Explorer is available from Overview, Branch Insights and Branch Comparisons. It exposes node labels and counts, relationship types and counts, the selected branch node and its source properties, and up to 5,000 directly connected records for the selected branch. Each connected record can be expanded to inspect its underlying properties and relationship type. It is read-only and uses the same committed graph that powers Q&A.
 
 ## Setup and run
 
@@ -78,10 +78,11 @@ Open `http://127.0.0.1:8000`.
 
 ### First result to try
 
-1. Open **Overview** and ask: `Which branches in Ward 1 offer a Digital Innovation Hub?`
-2. Open **Branch Insights**, select a branch and ask: `Which other branches share this neighbourhood?`
-3. Open **Branch Comparisons**, select two or more branches and use **Relate Explorer** to inspect each branch's connected annual records, ward, neighbourhood and services.
-4. In the activity-intensity panel, compare annual visits or circulation per 1,000 square feet.
+1. Open **Overview** and ask: `What branch had the highest annual circulation?` A yearless ranking compares all available branch-year records, identifies the highest single-year observation and shows the leading branch for each reporting year. Add a year to restrict the result, for example: `What branch had the highest annual circulation in 2024?`
+2. Ask: `Which branches in Ward 1 offer a Digital Innovation Hub?` to exercise a ward-to-branch-to-service traversal.
+3. Open **Branch Insights**, select a branch and ask: `Which other branches share this neighbourhood?` or `Which other branches offer the same services as this branch?`
+4. Open **Branch Comparisons**, select two or more branches and use **Relate Explorer** to inspect each branch's node properties, connected annual observations, ward, neighbourhood, services and events. Expand a connected record to inspect its stored values.
+5. In the **Branch analysis** metric tabs, compare Top 10/Bottom 10 cumulative rankings with the selected year's annual activity-versus-branch-size scatter plot. Use the activity-intensity panel to compare annual activity per 1,000 square feet.
 
 ## Where the data lives
 
@@ -109,7 +110,7 @@ LibraryTO calculates annual activity per 1,000 square feet using the existing an
 \text{Activity per 1,000 sq ft} = \frac{\text{Annual activity}}{\text{Branch square footage}} \times 1,000
 \]
 
-The network-level rate uses total annual activity divided by the combined floor area of branches with a reported value for that year. Branch-level rates are available in Branch Insights and Branch Comparisons. This is a size-normalized activity measure; it is not a measure of operational efficiency or service quality.
+The network-level rate uses total annual activity divided by the combined floor area of branches with a reported value for that year. Branch-level rates are available in Overview, Branch Insights and Branch Comparisons. The Overview Branch analysis tabs also show one year-specific activity-versus-branch-size scatter plot for the selected metric. This is a size-normalized activity measure; it is not a measure of operational efficiency or service quality.
 
 ## Verification
 
@@ -129,7 +130,7 @@ The Relate Explorer data endpoint is available at `/relate/explorer`; activity i
 
 ## Known data coverage
 
-The supplied annual CSV snapshots currently end in 2024 for circulation, visits and card registrations, and 2023 for workstation sessions. There are no 2025 or 2026 annual observations in the supplied records, so LibraryTO does not claim to have measured activity or forecast accuracy for those missing years. Forecasting remains a one-step estimate based on the historical observations that are actually available.
+The supplied annual CSV snapshots currently end in 2024 for circulation, visits and card registrations, and 2023 for workstation sessions. There are no 2025 or 2026 annual observations in the supplied records, so LibraryTO does not claim to have measured activity or forecast accuracy for those missing years. A yearless highest/lowest annual metric question compares the full historical branch-year set rather than assuming that the latest available year is the answer. The forecast view remains a one-step estimate based on the historical observations that are actually available; additional backtesting for unavailable future periods is not part of this submission.
 
 ## Deployment
 

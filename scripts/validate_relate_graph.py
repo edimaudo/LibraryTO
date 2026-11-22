@@ -1,6 +1,12 @@
 """Validate that the committed LibraryTO Relate file contains connected context."""
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
 from app.services.graph_enhancements import explorer_snapshot
 
 

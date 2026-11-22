@@ -60,23 +60,24 @@
     return `<div class="table-scroll"><table class="data-table"><thead><tr>${headers}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${mode === 'branch' ? 4 : codes.length+1}">No branch values available.</td></tr>`}</tbody></table></div>`;
   }
 
-  async function installIntensity(target, mode, codes) {
+  async function installIntensity(target, mode, codes, forcedMetric = null) {
     if (!target) return;
-    const selectionKey = (codes || []).join(',');
-    const existing = target.querySelector(`:scope > #intensity-${mode}`);
+    const selectionKey = `${(codes || []).join(',')}:${forcedMetric || ''}`;
+    const sectionId = `intensity-${mode}${forcedMetric ? `-${forcedMetric}` : ''}`;
+    const existing = target.querySelector(`:scope > #${sectionId}`);
     if (existing && existing.dataset.selection === selectionKey) return;
     existing?.remove();
-    const section = createSection(`intensity-${mode}`, 'Activity per 1,000 sq ft', 'Compare reported annual activity relative to branch floor area. This is a size-normalized measure, not a measure of efficiency.');
+    const section = createSection(sectionId, 'Activity per 1,000 sq ft', 'Compare reported annual activity relative to branch floor area. This is a size-normalized measure, not a measure of efficiency.');
     section.dataset.selection = selectionKey;
-    section.innerHTML += `<div class="intensity-controls"><label for="${mode}-intensity-metric">Measure</label><select class="control" id="${mode}-intensity-metric">${Object.entries(metricLabels).map(([key,label]) => `<option value="${key}">${escapeHtml(label)}</option>`).join('')}</select></div><div class="intensity-result" aria-live="polite"><p class="small-note">Loading activity intensity…</p></div>`;
+    const controlMarkup = forcedMetric ? '' : `<div class="intensity-controls"><label for="${mode}-intensity-metric">Measure</label><select class="control" id="${mode}-intensity-metric">${Object.entries(metricLabels).map(([key,label]) => `<option value="${key}">${escapeHtml(label)}</option>`).join('')}</select></div>`;
+    section.innerHTML += `${controlMarkup}<div class="intensity-result" aria-live="polite"><p class="small-note">Loading activity intensity…</p></div>`;
     target.append(section);
     const resultHost = section.querySelector('.intensity-result');
-    const select = section.querySelector('select');
-    let payload;
+    const select = forcedMetric ? null : section.querySelector('select');
     try {
-      payload = await getJSON(`/activity-intensity${codes.length ? `?branch_codes=${encodeURIComponent(codes.join(','))}` : ''}`);
-      const draw = () => { resultHost.innerHTML = intensityMarkup(select.value, payload, mode, codes); };
-      select.addEventListener('change', draw);
+      const payload = await getJSON(`/activity-intensity${codes.length ? `?branch_codes=${encodeURIComponent(codes.join(','))}` : ''}`);
+      const draw = () => { resultHost.innerHTML = intensityMarkup(forcedMetric || select.value, payload, mode, codes); };
+      select?.addEventListener('change', draw);
       draw();
     } catch (error) {
       resultHost.innerHTML = `<p class="notice error">${escapeHtml(error.message || 'Activity intensity is unavailable.')}</p>`;
@@ -85,6 +86,11 @@
 
   function branchLabel(branches, code) {
     return branches.find(item => item.code === code)?.name || code;
+  }
+  function propertyTable(properties) {
+    const entries = Object.entries(properties || {}).filter(([key,value]) => value !== null && value !== '');
+    if (!entries.length) return '<p class="small-note">No additional properties are stored on this node.</p>';
+    return `<div class="table-scroll"><table class="data-table graph-property-table"><tbody>${entries.map(([key,value])=>`<tr><th scope="row">${escapeHtml(key)}</th><td>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : value)}</td></tr>`).join('')}</tbody></table></div>`;
   }
 
   async function installExplorer(target, mode, selectedCodes) {
@@ -131,7 +137,15 @@
             if (!groups.has(key)) groups.set(key, {label:edge.relationship_label, edges:[]});
             groups.get(key).edges.push(edge);
           }
-          connections.innerHTML = `<div class="graph-root-node"><span>Selected branch node</span><strong>${escapeHtml(branch.branch_name)}</strong><small>BranchCode: ${escapeHtml(branch.branch_code)}</small></div>${[...groups.entries()].map(([type,group])=>`<section class="graph-relationship-group"><h4>${escapeHtml(group.label)} <span>${number(group.edges.length)}</span></h4><ul>${group.edges.map(edge=>`<li><span class="graph-edge-type">${escapeHtml(type)}</span><strong>${escapeHtml(edge.target_title)}</strong><small>${escapeHtml((edge.target_labels||[]).join(' · '))}</small></li>`).join('')}</ul></section>`).join('')}`;
+          const orderedGroups = [...groups.entries()].map(([type,group]) => {
+            group.edges.sort((a,b) => {
+              const ay = String(a.properties?.Year ?? a.properties?.FiscalYear ?? '');
+              const by = String(b.properties?.Year ?? b.properties?.FiscalYear ?? '');
+              return ay.localeCompare(by, undefined, {numeric:true});
+            });
+            return `<section class="graph-relationship-group"><h4>${escapeHtml(group.label)} <span>${number(group.edges.length)}</span></h4><div class="graph-node-list">${group.edges.map((edge,index)=>`<details class="graph-node-details"><summary><span class="graph-edge-type">${escapeHtml(type)}</span><strong>${escapeHtml(edge.target_title)}</strong><small>${escapeHtml((edge.target_labels||[]).join(' · '))}</small></summary><div class="graph-node-inspection"><h5>Connected node properties</h5>${propertyTable(edge.properties)}${Object.keys(edge.relationship_properties||{}).length?`<h5>Relationship properties</h5>${propertyTable(edge.relationship_properties)}`:''}</div></details>`).join('')}</div></section>`;
+          }).join('');
+          connections.innerHTML = `<div class="graph-root-node"><span>Selected branch node</span><strong>${escapeHtml(branch.branch_name)}</strong><small>BranchCode: ${escapeHtml(branch.branch_code)}</small></div><section class="graph-branch-properties"><h4>Branch node properties</h4>${propertyTable(branch.properties)}</section>${orderedGroups || '<p class="small-note">No outgoing relationships were found for this branch.</p>'}`;
         } catch (error) {
           connections.innerHTML = `<p class="notice error">${escapeHtml(error.message || 'The graph could not be explored.')}</p>`;
         }
@@ -149,11 +163,9 @@
     clearTimeout(enhancementTimer);
     enhancementTimer = setTimeout(async () => {
       if (page === 'overview') {
-        const panel = document.querySelector('#overview-panel-0');
-        if (panel) {
-          await installIntensity(panel, 'overview', []);
-          await installExplorer(root, 'overview', []);
-        }
+        const panel = document.querySelector('#overview-panel-2 > .ranking-metric-panel:not([hidden])');
+        if (panel) await installIntensity(panel, 'overview', [], panel.dataset.metric || 'circulation');
+        await installExplorer(root, 'overview', []);
       } else if (page === 'branches') {
         const profile = document.querySelector('#branch-profile');
         const content = profile?.querySelector('.profile-render-content');
@@ -169,7 +181,8 @@
         const result = document.querySelector('#comparison-results');
         if (result?.querySelector('.tabs[aria-label="comparison-main"]')) {
           const codes = [...document.querySelectorAll('#compare-list input[type="checkbox"]:checked')].map(item=>item.value);
-          await installIntensity(result, 'comparison', codes);
+          const metricPanel = result.querySelector('#comparison-main-panel-0 > .tab-panel:not([hidden])');
+          if (metricPanel) await installIntensity(metricPanel, 'comparison', codes, metricPanel.dataset.metric || 'circulation');
           await installExplorer(result, 'comparison', codes);
         } else if (result && !result.querySelector('#relate-explorer')) {
           await installExplorer(result, 'comparison', []);
@@ -182,6 +195,9 @@
   observer.observe(root, {childList:true, subtree:true});
   document.addEventListener('change', event => {
     if (event.target.matches('#compare-list input[type="checkbox"]')) enhance();
+  });
+  document.addEventListener('click', event => {
+    if (event.target.closest('.tabs[aria-label="ranking"]') || event.target.closest('.tabs[aria-label="comparison-year"]')) enhance();
   });
   enhance();
 })();

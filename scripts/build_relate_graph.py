@@ -235,22 +235,25 @@ def build_relationships(connection, datasets: dict[str, list[dict[str, Any]]]) -
     geography_props = label_properties(connection, "Neighbourhoods")
     name_key = next((key for key in geography_props if norm(key) in {"nbhdname", "neighbourhoodname", "neighbourhood", "neighborhood", "areaname", "areanameng", "areanamelong"}), None)
     number_key = next((key for key in geography_props if norm(key) in {"nbhdno", "neighbourhoodno", "neighbourhoodnumber", "areanumber", "areano", "areacode", "arealongcode", "areashortcode"}), None)
-    geo_linked = 0
-    if name_key or number_key:
-        field_key = name_key or number_key
-        prop = "name" if name_key else "neighbourhood_no"
-        query = (
+    geography_predicates = []
+    if name_key:
+        geography_predicates.append(
+            f"toLower(toString(a.{quote('name')})) = toLower(toString(g.{quote(name_key)}))"
+        )
+    if number_key:
+        geography_predicates.append(
+            f"toLower(toString(a.{quote('neighbourhood_no')})) = toLower(toString(g.{quote(number_key)}))"
+        )
+    if geography_predicates:
+        connection.execute(
             f"MATCH (a:{quote('LibraryNeighbourhood')}), (g:{quote('Neighbourhoods')}) "
-            f"WHERE toLower(toString(a.{quote(prop)})) = toLower(toString(g.{quote(field_key)})) "
+            f"WHERE {' OR '.join(geography_predicates)} "
             f"MERGE (a)-[:{quote('HAS_GEOGRAPHY_RECORD')}]->(g)"
         )
-        connection.execute(query)
-        geo_linked = 1
-    if geo_linked:
-        row = connection.execute(
+        rows = connection.execute(
             f"MATCH ()-[r:{quote('HAS_GEOGRAPHY_RECORD')}]->() RETURN count(r) AS count"
-        ).single()
-        counts["HAS_GEOGRAPHY_RECORD"] = int((row or {}).get("count") or 0)
+        ).fetchall()
+        counts["HAS_GEOGRAPHY_RECORD"] = int((rows[0].get("count") or 0) if rows else 0)
     else:
         counts["HAS_GEOGRAPHY_RECORD"] = 0
     connection.commit()
@@ -290,8 +293,8 @@ def validate_store(path: Path) -> dict[str, int]:
             raise RuntimeError(f"Graph validation failed; missing relationship types: {sorted(missing)}")
         counts = {}
         for rel_type in relationships:
-            row = connection.execute(f"MATCH ()-[r:{quote(rel_type)}]->() RETURN count(r) AS count").single()
-            counts[rel_type] = int((row or {}).get("count") or 0)
+            rows = connection.execute(f"MATCH ()-[r:{quote(rel_type)}]->() RETURN count(r) AS count").fetchall()
+            counts[rel_type] = int((rows[0].get("count") or 0) if rows else 0)
         for rel_type in expected:
             if counts.get(rel_type, 0) <= 0:
                 raise RuntimeError(f"Graph validation failed; {rel_type} has no relationships.")
@@ -306,7 +309,7 @@ def main() -> int:
     for filename, _ in SOURCES:
         if not (DATA / filename).is_file():
             raise SystemExit(f"Missing required data/{filename}; no graph changes were made.")
-    with tempfile.TemporaryDirectory(prefix="libraryto-relate-") as temp:
+    with tempfile.TemporaryDirectory(prefix="libraryto-relate-", dir=DATA) as temp:
         staging = Path(temp) / "tpl_library_graph.rebuild.rl"
         counts = import_and_build(staging)
         verified = validate_store(staging)

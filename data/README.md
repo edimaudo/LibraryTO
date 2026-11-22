@@ -31,3 +31,8 @@ python scripts/validate_relate_graph.py
 The builder creates and validates a staging `.rl` file before replacing the persistent store. Stop the application before rebuilding so the single-file store is not open by another process.
 
 CSV snapshots are read locally and cached by the application. There are no live API calls or external data refreshes. Rebuild the graph after changing any source snapshot, then commit the regenerated `tpl_library_graph.rl` with the matching CSV changes.
+
+
+## Graph relationships
+
+The node-only import notebook documents the original CSV load. The judging graph is rebuilt from those same CSV files by `../scripts/build_relate_graph.py`. This creates typed relationships from the existing `BranchCode`, ward, neighbourhood, service, facility and event fields. No external data source is used.
