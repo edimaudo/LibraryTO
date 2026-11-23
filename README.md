@@ -12,7 +12,7 @@ LibraryTO uses the seven CSV snapshots already in `data/`. It does not query ext
 - **Nodes:** Branches, annual circulation, visits, workstation sessions and card registrations, events, neighbourhood geography, wards, services and facilities.
 - **Relationships:** `HAS_CIRCULATION_RECORD`, `HAS_VISITS_RECORD`, `HAS_WORKSTATION_RECORD`, `HAS_REGISTRATION_RECORD`, `HOSTS_EVENT`, `IN_NEIGHBOURHOOD`, `IN_WARD`, `OFFERS_SERVICE`, `HAS_FACILITY` and `HAS_GEOGRAPHY_RECORD`.
 
-The application uses these edges for connected-context Q&A and the Relate Explorer. The Explorer shows branch properties, connected observations and their properties, and the graph's node labels and relationship counts. The Q&A can traverse ward, neighbourhood, service and cross-branch relationships. All edge endpoints are built from source rows in the existing CSV snapshots.
+The application uses these edges for connected-context Q&A and the Branch Explorer in Branch Insights and Branch Comparisons. Branch Insights places Branch Explorer immediately after Forecast and uses the branch selected in Find a branch; it shows readable node labels and relationship types plus neighbourhood, ward, service and facility connections. Branch Comparisons shows connections shared by the selected branches and connections specific to each branch. Annual observation records and program/event records are excluded from these explorer views. Branch properties remain in Branch Information. The Overview and Programs & Events pages do not contain a graph explorer. All graph relationships are built from the existing CSV snapshots.
 
 ## Setup and run
 
@@ -38,7 +38,7 @@ Start the application:
 uvicorn main:app --reload
 ```
 
-Open `http://127.0.0.1:8000`. Try asking: `Which branches in Ward 1 offer a Digital Innovation Hub?` Then open **Relate Explorer** in Overview to inspect the graph.
+Open `http://127.0.0.1:8000`. Try asking: `Which branches in Ward 1 offer a Digital Innovation Hub?` In Branch Insights, select a branch and open **Branch Explorer** after Forecast. In Branch Comparisons, select two or more branches to inspect shared and branch-specific connections.
 
 ## Activity intensity
 
