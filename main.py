@@ -17,7 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import DATA_DIR, ROOT
 from app.services.analytics import METRICS, branch_detail, branch_forecasts, compare, overview, recommend_events, event_filter_options
-from app.services.data_store import branch_records, dataset_status, event_records, observations, data_revision
+from app.services.data_store import branch_records, dataset_status, event_records, observations, data_revision, load_dataset, field
 from app.services.relate import RelateUnavailable, ask as relate_ask, graph_status
 from app.routes.graph_features import router as graph_features_router
 
@@ -26,7 +26,7 @@ app.include_router(graph_features_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 # Bump on source changes because static assets are served with immutable caching.
-STATIC_VERSION = "20261123-1"
+STATIC_VERSION = "20261123-2"
 
 
 class AskRequest(BaseModel):
@@ -241,8 +241,22 @@ async def list_branches(): return branch_records()
 @app.get("/branches/{code}")
 async def branch_profile(code: str):
     result = branch_detail(code)
-    if result is None: raise HTTPException(status_code=404, detail="Branch not found.")
-    return result
+    if result is None:
+        raise HTTPException(status_code=404, detail="Branch not found.")
+
+    source_row = next(
+        (row for row in load_dataset("branches")
+         if str(field(row, "BranchCode", "Branch Code", "Code")).strip().casefold() == code.casefold()),
+        {},
+    )
+    branch = {
+        **result["branch"],
+        "hours": str(field(source_row, "Hours", "OperatingHours", "OpeningHours")).strip(),
+        "public_parking": str(field(source_row, "PublicParking", "Public Parking", "Parking")).strip(),
+        "neighbourhood": str(field(source_row, "NBHDName", "NeighbourhoodName", "Neighbourhood", "Neighborhood")).strip(),
+        "ward": str(field(source_row, "WardName", "Ward Name")).strip(),
+    }
+    return {**result, "branch": branch}
 
 
 @app.get("/branches/{code}/forecasts")

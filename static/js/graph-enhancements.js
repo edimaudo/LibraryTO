@@ -1,4 +1,4 @@
-/* Read-only Relate Explorer and activity-intensity panels.
+/* Read-only Branch Explorer and activity-intensity panels.
    All derived values use the repository's existing CSV snapshots. */
 (() => {
   'use strict';
@@ -86,74 +86,150 @@
     }
   }
 
-  function branchLabel(branches, code) {
-    return branches.find(item => item.code === code)?.name || code;
+  const nodeLabels = {
+    BranchGeneralInformation: 'Branch directory',
+    Neighbourhoods: 'Neighbourhood geography',
+    LibraryNeighbourhood: 'Neighbourhood',
+    LibraryWard: 'Ward',
+    LibraryService: 'Service',
+    LibraryFacility: 'Facility'
+  };
+  const relationshipLabels = {
+    IN_NEIGHBOURHOOD: 'Located in neighbourhood',
+    IN_WARD: 'Located in ward',
+    OFFERS_SERVICE: 'Offers service',
+    HAS_FACILITY: 'Has facility'
+  };
+  const explorerNodeTypes = new Set([
+    'BranchGeneralInformation', 'LibraryNeighbourhood', 'LibraryWard', 'LibraryService', 'LibraryFacility'
+  ]);
+  const explorerRelationshipTypes = new Set([
+    'IN_NEIGHBOURHOOD', 'IN_WARD', 'OFFERS_SERVICE', 'HAS_FACILITY'
+  ]);
+  function humanizeIdentifier(value) {
+    return String(value || '')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .replace(/\b\w/g, char => char.toUpperCase());
+  }
+  function niceNodeLabel(value) {
+    return nodeLabels[value] || humanizeIdentifier(value);
+  }
+  function niceRelationshipLabel(value, fallback = '') {
+    return relationshipLabels[value] || fallback || humanizeIdentifier(value);
   }
   function propertyTable(properties) {
     const entries = Object.entries(properties || {}).filter(([key,value]) => value !== null && value !== '');
-    if (!entries.length) return '<p class="small-note">No additional properties are stored on this node.</p>';
-    return `<div class="table-scroll"><table class="data-table graph-property-table" aria-label="Stored graph node properties"><caption class="visually-hidden">Stored graph node properties</caption><tbody>${entries.map(([key,value])=>`<tr><th scope="row">${escapeHtml(key)}</th><td>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : value)}</td></tr>`).join('')}</tbody></table></div>`;
+    if (!entries.length) return '<p class="small-note">No additional details are available.</p>';
+    return `<div class="table-scroll"><table class="data-table graph-property-table" aria-label="Connected record details"><caption class="visually-hidden">Connected record details</caption><tbody>${entries.map(([key,value])=>`<tr><th scope="row">${escapeHtml(humanizeIdentifier(key))}</th><td>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : value)}</td></tr>`).join('')}</tbody></table></div>`;
   }
-
+  function explorerSummary(graph) {
+    const nodeRows = (graph.node_counts || []).filter(item => explorerNodeTypes.has(item.label)).map(item => `<tr><th scope="row">${escapeHtml(niceNodeLabel(item.label))}</th><td>${number(item.count)}</td></tr>`).join('');
+    const relationshipRows = (graph.relationship_counts || []).filter(item => explorerRelationshipTypes.has(item.type)).map(item => `<tr><th scope="row">${escapeHtml(niceRelationshipLabel(item.type, item.label))}</th><td>${number(item.count)}</td></tr>`).join('');
+    return `<div class="graph-stat-line"><span><strong>${number(graph.node_count)}</strong><small>Nodes</small></span><span><strong>${number(graph.relationship_count)}</strong><small>Relationships</small></span></div><div class="graph-summary-tables"><div class="table-scroll"><h3>Node Labels</h3><table class="data-table" aria-label="Node label counts"><caption class="visually-hidden">Node label counts</caption><thead><tr><th scope="col">Label</th><th scope="col">Nodes</th></tr></thead><tbody>${nodeRows || '<tr><td colspan="2">No node labels available.</td></tr>'}</tbody></table></div><div class="table-scroll"><h3>Relationship Types</h3><table class="data-table" aria-label="Relationship type counts"><caption class="visually-hidden">Relationship type counts</caption><thead><tr><th scope="col">Relationship</th><th scope="col">Connections</th></tr></thead><tbody>${relationshipRows || '<tr><td colspan="2">No relationship types available.</td></tr>'}</tbody></table></div></div>`;
+  }
+  function visibleConnections(branch) {
+    return (branch?.connections || []).filter(edge => explorerRelationshipTypes.has(edge.relationship_type));
+  }
+  function connectionGroups(edges) {
+    const groups = new Map();
+    for (const edge of edges) {
+      const key = edge.relationship_type;
+      if (!groups.has(key)) groups.set(key, {label:niceRelationshipLabel(key, edge.relationship_label), edges:[]});
+      groups.get(key).edges.push(edge);
+    }
+    return [...groups.values()].map(group => {
+      const rows = group.edges.map(edge => `<details class="graph-node-details"><summary><strong>${escapeHtml(edge.target_title || 'Connected record')}</strong></summary><div class="graph-node-inspection">${propertyTable(edge.properties)}</div></details>`).join('');
+      return `<section class="graph-relationship-group"><h3>${escapeHtml(group.label)} <span>${number(group.edges.length)}</span></h3><div class="graph-node-list">${rows}</div></section>`;
+    }).join('');
+  }
+  function connectionIdentity(edge) {
+    const props = edge.properties || {};
+    const preferred = {
+      IN_NEIGHBOURHOOD: ['area_key', 'neighbourhood_no', 'name'],
+      IN_WARD: ['area_key', 'ward_no', 'name'],
+      OFFERS_SERVICE: ['service_key', 'service_name', 'name'],
+      HAS_FACILITY: ['facility_key', 'facility_name', 'name']
+    }[edge.relationship_type] || [];
+    const lookup = new Map(Object.entries(props).map(([key,value]) => [key.toLowerCase().replace(/[^a-z0-9]/g,''), value]));
+    const identity = preferred.map(key => lookup.get(key.toLowerCase().replace(/[^a-z0-9]/g,''))).find(value => value !== undefined && value !== null && value !== '');
+    return `${edge.relationship_type}:${String(identity ?? edge.target_title ?? '').trim().toLowerCase()}`;
+  }
+  function comparisonConnections(branches) {
+    const shared = new Map();
+    const uniqueByBranch = new Map();
+    for (const branch of branches) {
+      const seen = new Set();
+      for (const edge of visibleConnections(branch)) {
+        const key = connectionIdentity(edge);
+        if (!key || seen.has(key)) continue;
+        seen.add(key);
+        if (!shared.has(key)) shared.set(key, {edge, branches:[]});
+        shared.get(key).branches.push(branch.branch_name);
+      }
+    }
+    const common = [...shared.values()].filter(item => item.branches.length > 1);
+    for (const branch of branches) {
+      const rows = [];
+      const seen = new Set();
+      for (const edge of visibleConnections(branch)) {
+        const key = connectionIdentity(edge);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const item = shared.get(key);
+        if (item?.branches.length === 1) rows.push(edge);
+      }
+      uniqueByBranch.set(branch.branch_code, rows);
+    }
+    const commonRows = common.map(item => `<tr><th scope="row">${escapeHtml(niceRelationshipLabel(item.edge.relationship_type, item.edge.relationship_label))}</th><td>${escapeHtml(item.edge.target_title || 'Connected record')}</td><td>${escapeHtml(item.branches.join(', '))}</td></tr>`).join('');
+    const sharedMarkup = common.length
+      ? `<div class="table-scroll"><table class="data-table" aria-label="Connections shared by selected branches"><caption class="visually-hidden">Connections shared by selected branches</caption><thead><tr><th scope="col">Relationship</th><th scope="col">Shared connection</th><th scope="col">Branches</th></tr></thead><tbody>${commonRows}</tbody></table></div>`
+      : '<p class="small-note">The selected branches do not share a neighbourhood, ward, service or facility connection in the graph.</p>';
+    const uniqueMarkup = branches.map(branch => {
+      const edges = uniqueByBranch.get(branch.branch_code) || [];
+      return `<details class="branch-connection-details"><summary><strong>${escapeHtml(branch.branch_name)}</strong><span>${number(edges.length)} branch-specific connections</span></summary>${edges.length ? connectionGroups(edges) : '<p class="small-note">No branch-specific connections in the selected categories.</p>'}</details>`;
+    }).join('');
+    return `<section class="branch-explorer-block"><h3>Shared connections</h3>${sharedMarkup}</section><section class="branch-explorer-block"><h3>Branch-specific connections</h3>${uniqueMarkup}</section>`;
+  }
   async function installExplorer(target, mode, selectedCodes) {
-    if (!target) return;
+    if (!target || !selectedCodes.length) return;
     const currentKey = selectedCodes.join(',');
-    const existing = target.querySelector(':scope > #relate-explorer');
+    const existing = target.querySelector(':scope > #branch-explorer');
     if (existing && existing.dataset.mode === mode && existing.dataset.selection === currentKey) return;
     existing?.remove();
-    const section = createSection('relate-explorer', 'Relate Explorer', 'Inspect the persistent graph, typed relationships and records connected to a physical branch.');
+    const section = createSection('branch-explorer', 'Branch Explorer', mode === 'comparison'
+      ? 'Explore shared and branch-specific neighbourhood, ward, service and facility connections for the selected branches.'
+      : 'Explore the selected branch’s neighbourhood, ward, service and facility connections.');
     section.dataset.mode = mode;
     section.dataset.selection = currentKey;
-    section.innerHTML += `<div class="relate-explorer-controls"><label for="relate-branch-select">Branch</label><select class="control" id="relate-branch-select"><option value="">Choose a branch</option></select><button class="button secondary" type="button" id="relate-refresh">Refresh graph</button></div><div class="relate-explorer-summary" aria-live="polite" aria-atomic="true"><p class="small-note" role="status">Loading graph summary…</p></div><div class="relate-explorer-connections" aria-live="polite" aria-atomic="true"></div>`;
+    section.innerHTML += '<div class="branch-explorer-summary" aria-live="polite" aria-atomic="true"><p class="small-note" role="status">Loading branch connections…</p></div><div class="branch-explorer-connections" aria-live="polite" aria-atomic="true"></div>';
     target.append(section);
-    const select = section.querySelector('#relate-branch-select');
-    const summary = section.querySelector('.relate-explorer-summary');
-    const connections = section.querySelector('.relate-explorer-connections');
+    const summary = section.querySelector('.branch-explorer-summary');
+    const connections = section.querySelector('.branch-explorer-connections');
     try {
-      const branches = await branchList();
-      const allowed = (mode === 'comparison' || mode === 'branch') && selectedCodes.length ? selectedCodes : branches.map(item=>item.code);
-      const options = allowed.map(code => `<option value="${escapeHtml(code)}">${escapeHtml(branchLabel(branches,code))}</option>`).join('');
-      select.innerHTML = `<option value="">${mode === 'overview' ? 'Choose a branch to inspect' : 'Choose a selected branch'}</option>${options}`;
-      if (selectedCodes.length) select.value = selectedCodes[0];
-      async function load(code) {
-        connections.innerHTML = '<p class="small-note" role="status">Loading connected records…</p>';
-        try {
-          const params = code ? `?branch_codes=${encodeURIComponent(code)}` : '';
-          const graph = await getJSON(`/relate/explorer${params}`);
-          summary.innerHTML = `<div class="graph-stat-line"><span><strong>${number(graph.node_count)}</strong><small>nodes</small></span><span><strong>${number(graph.relationship_count)}</strong><small>relationships</small></span><span><strong>${escapeHtml(graph.store)}</strong><small>persistent store · ${escapeHtml(graph.mode)}</small></span></div><div class="graph-summary-tables"><div class="table-scroll"><h3>Node labels</h3><table class="data-table" aria-label="Relate node label counts"><caption class="visually-hidden">Relate node label counts</caption><thead><tr><th scope="col">Label</th><th scope="col">Nodes</th></tr></thead><tbody>${(graph.node_counts||[]).map(item=>`<tr><th scope="row">${escapeHtml(item.label)}</th><td>${number(item.count)}</td></tr>`).join('')}</tbody></table></div><div class="table-scroll"><h3>Relationship types</h3><table class="data-table" aria-label="Relate relationship counts"><caption class="visually-hidden">Relate relationship counts</caption><thead><tr><th scope="col">Relationship</th><th scope="col">Edges</th></tr></thead><tbody>${(graph.relationship_counts||[]).map(item=>`<tr><th scope="row">${escapeHtml(item.label)}</th><td>${number(item.count)}</td></tr>`).join('') || '<tr><td colspan="2">No relationships have been created. Run the graph build script.</td></tr>'}</tbody></table></div></div>`;
-          const branch = (graph.selected||[])[0];
-          if (!code) {
-            connections.innerHTML = '<p class="small-note">Select a branch to inspect the records connected to it.</p>';
-            return;
-          }
-          if (!branch || !branch.connections?.length) {
-            connections.innerHTML = '<p class="small-note">No connected records were found for this branch. Run <code>python scripts/build_relate_graph.py</code> after extracting the update to create the relationships.</p>';
-            return;
-          }
-          const groups = new Map();
-          for (const edge of branch.connections) {
-            const key = edge.relationship_type;
-            if (!groups.has(key)) groups.set(key, {label:edge.relationship_label, edges:[]});
-            groups.get(key).edges.push(edge);
-          }
-          const orderedGroups = [...groups.entries()].map(([type,group]) => {
-            group.edges.sort((a,b) => {
-              const ay = String(a.properties?.Year ?? a.properties?.FiscalYear ?? '');
-              const by = String(b.properties?.Year ?? b.properties?.FiscalYear ?? '');
-              return ay.localeCompare(by, undefined, {numeric:true});
-            });
-            return `<section class="graph-relationship-group"><h4>${escapeHtml(group.label)} <span>${number(group.edges.length)}</span></h4><div class="graph-node-list">${group.edges.map(edge=>`<details class="graph-node-details"><summary><span class="graph-edge-type">${escapeHtml(type)}</span><strong>${escapeHtml(edge.target_title)}</strong><small>${escapeHtml((edge.target_labels||[]).join(' · '))}</small></summary><div class="graph-node-inspection"><h5>Connected node properties</h5>${propertyTable(edge.properties)}${Object.keys(edge.relationship_properties||{}).length?`<h5>Relationship properties</h5>${propertyTable(edge.relationship_properties)}`:''}</div></details>`).join('')}</div></section>`;
-          }).join('');
-          connections.innerHTML = `<div class="graph-root-node"><span>Selected branch node</span><strong>${escapeHtml(branch.branch_name)}</strong><small>BranchCode: ${escapeHtml(branch.branch_code)}</small></div><section class="graph-branch-properties"><h3>Branch node properties</h3>${propertyTable(branch.properties)}</section>${orderedGroups || '<p class="small-note">No outgoing relationships were found for this branch.</p>'}`;
-        } catch (error) {
-          connections.innerHTML = `<p class="notice error" role="alert">${escapeHtml(error.message || 'The graph could not be explored.')}</p>`;
+      const graph = await getJSON(`/relate/explorer?branch_codes=${encodeURIComponent(selectedCodes.join(','))}`);
+      summary.innerHTML = explorerSummary(graph);
+      const branches = (graph.selected || []).filter(branch => selectedCodes.includes(branch.branch_code));
+      if (mode === 'comparison') {
+        if (branches.length < 2) {
+          connections.innerHTML = '<p class="small-note">Select at least two branches to explore their connected context.</p>';
+          return;
         }
+        connections.innerHTML = comparisonConnections(branches);
+        return;
       }
-      select.addEventListener('change', () => load(select.value));
-      section.querySelector('#relate-refresh').addEventListener('click', () => load(select.value));
-      await load(select.value);
+      const branch = branches[0];
+      if (!branch) {
+        connections.innerHTML = '<p class="small-note">The selected branch could not be found in the graph.</p>';
+        return;
+      }
+      const edges = visibleConnections(branch);
+      connections.innerHTML = `<div class="graph-root-node"><strong>${escapeHtml(branch.branch_name)}</strong></div>${edges.length ? connectionGroups(edges) : '<p class="small-note">No neighbourhood, ward, service or facility connections were found for this branch.</p>'}`;
     } catch (error) {
-      summary.innerHTML = `<p class="notice error" role="alert">${escapeHtml(error.message || 'Branch list unavailable.')}</p>`;
+      summary.innerHTML = `<p class="notice error" role="alert">${escapeHtml(error.message || 'The Branch Explorer could not be loaded.')}</p>`;
+      connections.innerHTML = '';
     }
   }
 
@@ -170,10 +246,9 @@
       enhancing = true;
       try {
         if (page === 'overview') {
-          // ranking-metric panels are nested inside an analysis section, not direct children.
+          // Activity intensity remains in the annual metric view. The graph explorer is not useful here.
           const panel = document.querySelector('#overview-panel-2 .ranking-metric-panel:not([hidden])');
           if (panel) await installIntensity(panel, 'overview', [], panel.dataset.metric || 'circulation');
-          await installExplorer(root, 'overview', []);
         } else if (page === 'branches') {
           const profile = document.querySelector('#branch-profile');
           const content = profile?.querySelector('.profile-render-content');
@@ -181,7 +256,8 @@
           if (content && code && !profile.querySelector('.profile-loading-overlay')) {
             const activityPanel = content.querySelector('#branch-panel-1');
             if (activityPanel) await installIntensity(activityPanel, 'branch', [code]);
-            await installExplorer(profile, 'branch', [code]);
+            const explorerHost = content.querySelector('#branch-explorer-host');
+            if (explorerHost) await installExplorer(explorerHost, 'branch', [code]);
           }
         } else if (page === 'comparisons') {
           const result = document.querySelector('#comparison-results');
@@ -189,7 +265,7 @@
             const codes = [...document.querySelectorAll('#compare-list input[type="checkbox"]:checked')].map(item=>item.value);
             const metricPanel = result.querySelector('#comparison-main-panel-0 > .tab-panel:not([hidden])');
             if (metricPanel) await installIntensity(metricPanel, 'comparison', codes, metricPanel.dataset.metric || 'circulation');
-            await installExplorer(result, 'comparison', codes);
+            if (codes.length >= 2) await installExplorer(result, 'comparison', codes);
           }
         }
       } finally {

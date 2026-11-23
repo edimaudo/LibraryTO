@@ -52,3 +52,14 @@
 .branch-size-heading h3{margin:0;}
 .branch-size-heading .form-field{min-width:10rem;max-width:14rem;margin:0;}
 @media (max-width:640px){.branch-size-heading{align-items:stretch;}.branch-size-heading .form-field{max-width:none;width:100%;}}
+
+
+/* Branch Explorer: selection-driven connections and readable branch hours. */
+.branch-explorer-block { margin: 1.35rem 0; }
+.branch-explorer-block > h3 { margin: 0 0 .7rem; font-size: 1rem; }
+.branch-connection-details { border-top: 1px solid var(--line); padding: .65rem 0; }
+.branch-connection-details:last-child { border-bottom: 1px solid var(--line); }
+.branch-connection-details > summary { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; }
+.branch-connection-details > summary span { color: var(--muted); font-size: .82rem; }
+.branch-hours { display: grid; gap: .2rem; min-width: 17rem; white-space: normal; line-height: 1.45; }
+@media (max-width: 700px) { .branch-connection-details > summary { align-items: flex-start; flex-direction: column; gap: .2rem; } }
