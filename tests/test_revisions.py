@@ -826,9 +826,10 @@ def test_overview_annual_metric_layout_has_no_pearson_correlation():
     js = (root / "static/js/app.js").read_text(encoding="utf-8")
     assert "function correlations(data)" not in js
     assert "Pearson correlation" not in js
-    assert "Annual metric" in js
-    assert "Annual activity and branch area" in js
-    assert "branchActivitySizeChart(data,metric,selectedYear)" in js
+    assert "Branch Overview" in js
+    assert "Annual Activity And Branch Area" in js
+    assert "branchActivitySizeChart(data,metric,selectedYears)" in js
+    assert "All Years" in js
 
 
 

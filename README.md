@@ -12,7 +12,13 @@ LibraryTO uses the seven CSV snapshots already in `data/`. It does not query ext
 - **Nodes:** Branches, annual circulation, visits, workstation sessions and card registrations, events, neighbourhood geography, wards, services and facilities.
 - **Relationships:** `HAS_CIRCULATION_RECORD`, `HAS_VISITS_RECORD`, `HAS_WORKSTATION_RECORD`, `HAS_REGISTRATION_RECORD`, `HOSTS_EVENT`, `IN_NEIGHBOURHOOD`, `IN_WARD`, `OFFERS_SERVICE`, `HAS_FACILITY` and `HAS_GEOGRAPHY_RECORD`.
 
-The application uses these edges for connected-context Q&A and the Branch Explorer in Branch Insights and Branch Comparisons. Branch Insights places Branch Explorer immediately after Forecast and uses the branch selected in Find a branch; it shows readable node labels and relationship types plus neighbourhood, ward, service and facility connections. Branch Comparisons shows connections shared by the selected branches and connections specific to each branch. Annual observation records and program/event records are excluded from these explorer views. Branch properties remain in Branch Information. The Overview and Programs & Events pages do not contain a graph explorer. All graph relationships are built from the existing CSV snapshots.
+The application uses these edges for connected-context Q&A and the Branch Explorer in Branch Insights and Branch Comparisons. Branch Insights places Branch Explorer after Activity & Forecast and uses the branch selected in Find a branch. It identifies other branches connected through the same ward or neighbourhood, compares their reported services, and highlights services reported by local peers but not listed for the selected branch. Branch Comparisons provides a dedicated Branch Explorer subtab with pairwise shared neighbourhoods, wards and services, plus a service-coverage matrix for the selected branches. Annual observation records and program/event records are excluded from these explorer views. Branch properties and reported services remain in Branch Information. Overview and Programs & Events do not contain a graph explorer. All graph relationships and peer insights are derived from the existing CSV snapshots and their Relate graph connections.
+
+## Application sections
+
+- **Overview:** The **Branch Overview** tab groups annual metric rankings and the branch-area comparison under one **Reporting Year** selector. It defaults to **All Years**, which filters both the Top 10/Bottom 10 rankings and the annual activity-versus-area chart. The **Location** tab also defaults to **All Years**; map colours reflect cumulative reported activity across the available years.
+- **Branch Insights:** **Branch Information** includes hours, public parking, neighbourhood, ward and reported services. **Activity & Forecast** combines the historical series and its forecast in one graph per measure. **Branch Explorer** uses the branch selected through **Find a branch** to identify same-area peer branches and compare reported service coverage.
+- **Branch Comparisons:** **Branch Explorer** is a separate subtab. It shows pairwise shared neighbourhoods, wards and services, plus a reported-service matrix across the selected branches.
 
 ## Setup and run
 
@@ -38,15 +44,7 @@ Start the application:
 uvicorn main:app --reload
 ```
 
-Open `http://127.0.0.1:8000`. Try asking: `Which branches in Ward 1 offer a Digital Innovation Hub?` In Branch Insights, select a branch and open **Branch Explorer** after Forecast. In Branch Comparisons, select two or more branches to inspect shared and branch-specific connections.
-
-## Activity intensity
-
-Overview, Branch Insights and Branch Comparisons include activity per 1,000 square feet:
-
-\[\text{Activity intensity} = \frac{\text{annual activity}}{\text{branch square footage}} \times 1{,}000\]
-
-The network rate is calculated from total activity divided by the combined floor area of branches with a reported value. It is a size-normalized measure, not a measure of operational efficiency or service quality. The Overview Annual metric view contains the top/bottom branch rankings and a selected-year activity-versus-floor-area chart for each metric. Pearson correlation has been removed.
+Open `http://127.0.0.1:8000`. Try asking: `Which branches in Ward 1 offer a Digital Innovation Hub?` In Branch Insights, select a branch and open **Branch Explorer** after Activity & Forecast to inspect local peer branches and reported service coverage. In Branch Comparisons, select two or more branches and open the **Branch Explorer** subtab to compare shared areas, pairwise service overlap and service distribution.
 
 ## Validation
 

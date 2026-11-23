@@ -1,5 +1,4 @@
-/* Read-only Branch Explorer and activity-intensity panels.
-   All derived values use the repository's existing CSV snapshots. */
+/* Selection-driven Branch Explorer insights powered by the Relate graph. */
 (() => {
   'use strict';
 
@@ -7,15 +6,17 @@
   const root = document.querySelector('#page-content');
   if (!root) return;
 
-  const metricLabels = {
-    circulation: 'Annual circulation',
-    visits: 'Annual visits',
-    workstations: 'Workstation sessions',
-    registrations: 'Card registrations'
-  };
   let branchListPromise;
-  const number = value => value == null || !Number.isFinite(Number(value)) ? '—' : new Intl.NumberFormat('en-CA', {maximumFractionDigits: 2}).format(Number(value));
+  const number = value => value == null || !Number.isFinite(Number(value)) ? '0' : new Intl.NumberFormat('en-CA', {maximumFractionDigits: 0}).format(Number(value));
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+  const humanizeIdentifier = value => String(value || '').replace(/([a-z0-9])([A-Z])/g,'$1 $2').replace(/[_-]+/g,' ').replace(/\s+/g,' ').trim().replace(/\b\w/g,letter=>letter.toUpperCase());
+  const labels = {
+    IN_NEIGHBOURHOOD:'Neighbourhood',
+    IN_WARD:'Ward',
+    OFFERS_SERVICE:'Reported Service',
+    HAS_FACILITY:'Facility'
+  };
+  const visibleTypes = new Set(Object.keys(labels));
 
   async function getJSON(url) {
     const response = await fetch(url, {headers:{'Accept':'application/json'}, cache:'no-store'});
@@ -34,257 +35,175 @@
     section.innerHTML = `<div class="enhancement-heading"><div><h2>${escapeHtml(title)}</h2><p class="small-note">${escapeHtml(description)}</p></div></div>`;
     return section;
   }
-  function intensityMarkup(metric, result, mode, codes) {
-    const data = result.metrics?.[metric];
-    if (!data) return '<p class="small-note">No matching annual observations are available.</p>';
-    const years = data.years || [];
-    if (!years.length) return '<p class="small-note">No annual observations are available for this selection.</p>';
-    if (mode === 'overview') {
-      const rows = years.map(item => `<tr><th scope="row">${escapeHtml(item.year)}</th><td>${number(item.network_per_1000_sq_ft)}</td><td>${number(item.branches_with_values)}</td></tr>`).join('');
-      const latest = years[years.length - 1];
-      const top = (latest.branch_values || []).slice(0, 10).map(item => `<tr><th scope="row">${escapeHtml(item.name)}</th><td>${number(item.per_1000_sq_ft)}</td><td>${number(item.activity)}</td><td>${number(item.square_footage)}</td></tr>`).join('');
-      return `<div class="intensity-summary"><p><strong>Network intensity</strong> is total reported activity divided by the square footage of branches with a reported value for that year.</p><div class="table-scroll"><table class="data-table" aria-label="Network activity intensity by year"><caption class="visually-hidden">Network activity intensity by year</caption><thead><tr><th scope="col">Year</th><th scope="col">Activity per 1,000 sq ft</th><th scope="col">Branches included</th></tr></thead><tbody>${rows}</tbody></table></div><h3>Highest branch intensity · ${escapeHtml(latest.year)}</h3><div class="table-scroll"><table class="data-table" aria-label="Branches with highest activity intensity"><caption class="visually-hidden">Branches with highest activity intensity in ${escapeHtml(latest.year)}</caption><thead><tr><th scope="col">Branch</th><th scope="col">Per 1,000 sq ft</th><th scope="col">Annual activity</th><th scope="col">Area (sq ft)</th></tr></thead><tbody>${top || '<tr><td colspan="4">No branch values available.</td></tr>'}</tbody></table></div></div>`;
-    }
-    const selected = new Set(codes || []);
-    const rows = [];
-    for (const year of years) {
-      const values = year.branch_values || [];
-      if (mode === 'branch') {
-        const match = values.find(item => selected.has(item.code));
-        if (match) rows.push(`<tr><th scope="row">${escapeHtml(year.year)}</th><td>${number(match.per_1000_sq_ft)}</td><td>${number(match.activity)}</td><td>${number(match.square_footage)}</td></tr>`);
-      } else {
-        const matches = values.filter(item => selected.has(item.code));
-        if (matches.length) rows.push(`<tr><th scope="row">${escapeHtml(year.year)}</th>${codes.map(code => {const m=matches.find(item=>item.code===code);return `<td>${number(m?.per_1000_sq_ft)}</td>`;}).join('')}</tr>`);
-      }
-    }
-    const headers = mode === 'branch' ? '<th scope="col">Year</th><th scope="col">Per 1,000 sq ft</th><th scope="col">Annual activity</th><th scope="col">Area (sq ft)</th>' : `<th scope="col">Year</th>${codes.map(code => `<th scope="col">${escapeHtml(code)}</th>`).join('')}`;
-    const caption = mode === 'branch' ? 'Selected branch activity intensity by year' : 'Selected branch activity intensity comparison by year';
-    return `<div class="table-scroll"><table class="data-table" aria-label="${caption}"><caption class="visually-hidden">${caption}</caption><thead><tr>${headers}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${mode === 'branch' ? 4 : codes.length+1}">No branch values available.</td></tr>`}</tbody></table></div>`;
+  function visibleConnections(branch, type = null) {
+    return (branch?.connections || []).filter(edge => visibleTypes.has(edge.relationship_type) && (!type || edge.relationship_type === type));
   }
+  function edgeName(edge) {
+    const props = edge?.properties || {};
+    const normal = Object.fromEntries(Object.entries(props).map(([key,value])=>[key.toLowerCase().replace(/[^a-z0-9]/g,''),value]));
+    if (edge.relationship_type === 'OFFERS_SERVICE') return String(normal.servicename || edge.target_title || 'Service');
+    if (edge.relationship_type === 'HAS_FACILITY') return String(normal.facilityname || edge.target_title || 'Facility');
+    return String(edge.target_title || normal.name || '');
+  }
+  function edgeIdentity(edge) {
+    const props=edge?.properties||{};
+    const normal=Object.fromEntries(Object.entries(props).map(([key,value])=>[key.toLowerCase().replace(/[^a-z0-9]/g,''),value]));
+    const candidates={
+      IN_NEIGHBOURHOOD:['areakey','neighbourhoodno','name'],
+      IN_WARD:['areakey','wardno','name'],
+      OFFERS_SERVICE:['servicekey','servicename','name'],
+      HAS_FACILITY:['facilitykey','facilityname','name']
+    }[edge.relationship_type]||[];
+    const value=candidates.map(key=>normal[key]).find(item=>item!==undefined&&item!==null&&item!=='');
+    return `${edge.relationship_type}:${String(value??edgeName(edge)).trim().toLowerCase()}`;
+  }
+  function edgeNames(branch,type) {
+    return [...new Set(visibleConnections(branch,type).map(edgeName).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+  }
+  function peerContextLabel(context) {
+    return `${context.context_type==='ward'?'Ward':'Neighbourhood'}: ${context.context_name}`;
+  }
+  function branchExplorerInsights(branch) {
+    const peers=(branch.peer_branches||[]).filter(peer=>peer.branch_code!==branch.branch_code);
+    const ownServices=edgeNames(branch,'OFFERS_SERVICE');
+    const ownServiceSet=new Set(ownServices.map(name=>name.toLowerCase()));
+    const peerRows=peers.map(peer=>{
+      const peerServices=new Set((peer.services||[]).map(name=>String(name).toLowerCase()));
+      const shared=ownServices.filter(name=>peerServices.has(name.toLowerCase()));
+      const contexts=(peer.contexts||[]).map(peerContextLabel);
+      return {...peer,sharedServices:shared,contextLabel:contexts.join('; ')||'Shared graph context'};
+    }).sort((a,b)=>b.sharedServices.length-a.sharedServices.length||a.branch_name.localeCompare(b.branch_name));
 
-  async function installIntensity(target, mode, codes, forcedMetric = null) {
-    if (!target) return;
-    const selectionKey = `${(codes || []).join(',')}:${forcedMetric || ''}`;
-    const sectionId = `intensity-${mode}${forcedMetric ? `-${forcedMetric}` : ''}`;
-    const existing = target.querySelector(`:scope > #${sectionId}`);
-    if (existing && existing.dataset.selection === selectionKey) return;
-    existing?.remove();
-    const section = createSection(sectionId, 'Activity Intensity', 'Annual activity per 1,000 square feet, calculated from the supplied branch area and annual records. This is a size-normalized measure, not a measure of efficiency.');
-    section.dataset.selection = selectionKey;
-    const controlMarkup = forcedMetric ? '' : `<div class="intensity-controls"><label for="${mode}-intensity-metric">Annual metric</label><select class="control" id="${mode}-intensity-metric">${Object.entries(metricLabels).map(([key,label]) => `<option value="${key}">${escapeHtml(label)}</option>`).join('')}</select></div>`;
-    section.innerHTML += `${controlMarkup}<div class="intensity-result" aria-live="polite" aria-atomic="true"><p class="small-note" role="status">Loading activity intensity…</p></div>`;
-    target.append(section);
-    const resultHost = section.querySelector('.intensity-result');
-    const select = forcedMetric ? null : section.querySelector('select');
-    try {
-      const payload = await getJSON(`/activity-intensity${codes.length ? `?branch_codes=${encodeURIComponent(codes.join(','))}` : ''}`);
-      const draw = () => { resultHost.innerHTML = intensityMarkup(forcedMetric || select.value, payload, mode, codes); };
-      select?.addEventListener('change', draw);
-      draw();
-    } catch (error) {
-      resultHost.innerHTML = `<p class="notice error" role="alert">${escapeHtml(error.message || 'Activity intensity is unavailable.')}</p>`;
-    }
-  }
+    const peerMarkup=peerRows.length
+      ? `<div class="table-scroll"><table class="data-table" aria-label="Other branches sharing this branch's ward or neighbourhood"><caption class="visually-hidden">Other branches sharing this branch's ward or neighbourhood</caption><thead><tr><th scope="col">Branch</th><th scope="col">Shared Context</th><th scope="col">Reported Services In Common</th></tr></thead><tbody>${peerRows.map(peer=>`<tr><th scope="row">${escapeHtml(peer.branch_name)}</th><td>${escapeHtml(peer.contextLabel)}</td><td>${peer.sharedServices.length?escapeHtml(peer.sharedServices.join(', ')):'No shared services reported'}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="small-note">No other branches are connected through this branch’s neighbourhood or ward in the current graph.</p>';
 
-  const nodeLabels = {
-    BranchGeneralInformation: 'Branch directory',
-    Neighbourhoods: 'Neighbourhood geography',
-    LibraryNeighbourhood: 'Neighbourhood',
-    LibraryWard: 'Ward',
-    LibraryService: 'Service',
-    LibraryFacility: 'Facility'
-  };
-  const relationshipLabels = {
-    IN_NEIGHBOURHOOD: 'Located in neighbourhood',
-    IN_WARD: 'Located in ward',
-    OFFERS_SERVICE: 'Offers service',
-    HAS_FACILITY: 'Has facility'
-  };
-  const explorerNodeTypes = new Set([
-    'BranchGeneralInformation', 'LibraryNeighbourhood', 'LibraryWard', 'LibraryService', 'LibraryFacility'
-  ]);
-  const explorerRelationshipTypes = new Set([
-    'IN_NEIGHBOURHOOD', 'IN_WARD', 'OFFERS_SERVICE', 'HAS_FACILITY'
-  ]);
-  function humanizeIdentifier(value) {
-    return String(value || '')
-      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-      .replace(/[_-]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim()
-      .replace(/\b\w/g, char => char.toUpperCase());
+    const coverage=new Map();
+    ownServices.forEach(name=>coverage.set(name.toLowerCase(),{name,selected:true,peers:[]}));
+    peerRows.forEach(peer=>(peer.services||[]).forEach(name=>{
+      const key=String(name).toLowerCase();
+      if(!coverage.has(key))coverage.set(key,{name,selected:false,peers:[]});
+      coverage.get(key).peers.push(peer.branch_name);
+    }));
+    const coverageRows=[...coverage.values()].sort((a,b)=>b.peers.length-a.peers.length||a.name.localeCompare(b.name));
+    const coverageMarkup=coverageRows.length&&peerRows.length
+      ? `<div class="table-scroll"><table class="data-table" aria-label="Reported service coverage across branches in the same area"><caption class="visually-hidden">Reported service coverage across branches in the same area</caption><thead><tr><th scope="col">Service</th><th scope="col">Selected Branch</th><th scope="col">Other Local Branches</th></tr></thead><tbody>${coverageRows.map(item=>`<tr><th scope="row">${escapeHtml(item.name)}</th><td>${item.selected?'Reported':'Not Reported'}</td><td>${item.peers.length?`${number(item.peers.length)}: ${escapeHtml(item.peers.join(', '))}`:'None in selected peer group'}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="small-note">Service coverage comparisons appear when other branches share the selected branch’s ward or neighbourhood.</p>';
+
+    const sharedServiceCount=coverageRows.filter(item=>item.selected&&item.peers.length>0).length;
+    const onlyElsewhere=coverageRows.filter(item=>!item.selected&&item.peers.length>0);
+    const insights=[];
+    if(peerRows.length)insights.push(`${peerRows.length} other ${peerRows.length===1?'branch shares':'branches share'} a ward or neighbourhood with ${branch.branch_name}.`);
+    if(sharedServiceCount)insights.push(`${sharedServiceCount} reported ${sharedServiceCount===1?'service is':'services are'} also offered by at least one local peer.`);
+    if(onlyElsewhere.length)insights.push(`${onlyElsewhere.length} ${onlyElsewhere.length===1?'service is':'services are'} reported by local peers but not listed for this branch.`);
+    const insightMarkup=insights.length?`<ul class="branch-explorer-takeaways">${insights.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul>`:'<p class="small-note">The available graph does not contain enough connected peer data to calculate local service comparisons.</p>';
+
+    return `${insightMarkup}<section class="branch-explorer-block"><h3>Branches In The Same Area</h3>${peerMarkup}</section><section class="branch-explorer-block"><h3>Local Service Coverage</h3>${coverageMarkup}</section>`;
   }
-  function niceNodeLabel(value) {
-    return nodeLabels[value] || humanizeIdentifier(value);
-  }
-  function niceRelationshipLabel(value, fallback = '') {
-    return relationshipLabels[value] || fallback || humanizeIdentifier(value);
-  }
-  function propertyTable(properties) {
-    const entries = Object.entries(properties || {}).filter(([key,value]) => value !== null && value !== '');
-    if (!entries.length) return '<p class="small-note">No additional details are available.</p>';
-    return `<div class="table-scroll"><table class="data-table graph-property-table" aria-label="Connected record details"><caption class="visually-hidden">Connected record details</caption><tbody>${entries.map(([key,value])=>`<tr><th scope="row">${escapeHtml(humanizeIdentifier(key))}</th><td>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : value)}</td></tr>`).join('')}</tbody></table></div>`;
-  }
-  function explorerSummary(graph) {
-    const nodeRows = (graph.node_counts || []).filter(item => explorerNodeTypes.has(item.label)).map(item => `<tr><th scope="row">${escapeHtml(niceNodeLabel(item.label))}</th><td>${number(item.count)}</td></tr>`).join('');
-    const relationshipRows = (graph.relationship_counts || []).filter(item => explorerRelationshipTypes.has(item.type)).map(item => `<tr><th scope="row">${escapeHtml(niceRelationshipLabel(item.type, item.label))}</th><td>${number(item.count)}</td></tr>`).join('');
-    return `<div class="graph-stat-line"><span><strong>${number(graph.node_count)}</strong><small>Nodes</small></span><span><strong>${number(graph.relationship_count)}</strong><small>Relationships</small></span></div><div class="graph-summary-tables"><div class="table-scroll"><h3>Node Labels</h3><table class="data-table" aria-label="Node label counts"><caption class="visually-hidden">Node label counts</caption><thead><tr><th scope="col">Label</th><th scope="col">Nodes</th></tr></thead><tbody>${nodeRows || '<tr><td colspan="2">No node labels available.</td></tr>'}</tbody></table></div><div class="table-scroll"><h3>Relationship Types</h3><table class="data-table" aria-label="Relationship type counts"><caption class="visually-hidden">Relationship type counts</caption><thead><tr><th scope="col">Relationship</th><th scope="col">Connections</th></tr></thead><tbody>${relationshipRows || '<tr><td colspan="2">No relationship types available.</td></tr>'}</tbody></table></div></div>`;
-  }
-  function visibleConnections(branch) {
-    return (branch?.connections || []).filter(edge => explorerRelationshipTypes.has(edge.relationship_type));
-  }
-  function connectionGroups(edges) {
-    const groups = new Map();
-    for (const edge of edges) {
-      const key = edge.relationship_type;
-      if (!groups.has(key)) groups.set(key, {label:niceRelationshipLabel(key, edge.relationship_label), edges:[]});
-      groups.get(key).edges.push(edge);
+  function pairwiseInsights(branches) {
+    const pairs=[];
+    for(let i=0;i<branches.length;i++)for(let j=i+1;j<branches.length;j++){
+      const left=branches[i],right=branches[j];
+      const shared=(type)=>{
+        const rightSet=new Set(visibleConnections(right,type).map(edgeIdentity));
+        return visibleConnections(left,type).filter(edge=>rightSet.has(edgeIdentity(edge))).map(edgeName).filter(Boolean);
+      };
+      pairs.push({
+        left:left.branch_name,
+        right:right.branch_name,
+        neighbourhoods:shared('IN_NEIGHBOURHOOD'),
+        wards:shared('IN_WARD'),
+        services:shared('OFFERS_SERVICE')
+      });
     }
-    return [...groups.values()].map(group => {
-      const rows = group.edges.map(edge => `<details class="graph-node-details"><summary><strong>${escapeHtml(edge.target_title || 'Connected record')}</strong></summary><div class="graph-node-inspection">${propertyTable(edge.properties)}</div></details>`).join('');
-      return `<section class="graph-relationship-group"><h3>${escapeHtml(group.label)} <span>${number(group.edges.length)}</span></h3><div class="graph-node-list">${rows}</div></section>`;
-    }).join('');
-  }
-  function connectionIdentity(edge) {
-    const props = edge.properties || {};
-    const preferred = {
-      IN_NEIGHBOURHOOD: ['area_key', 'neighbourhood_no', 'name'],
-      IN_WARD: ['area_key', 'ward_no', 'name'],
-      OFFERS_SERVICE: ['service_key', 'service_name', 'name'],
-      HAS_FACILITY: ['facility_key', 'facility_name', 'name']
-    }[edge.relationship_type] || [];
-    const lookup = new Map(Object.entries(props).map(([key,value]) => [key.toLowerCase().replace(/[^a-z0-9]/g,''), value]));
-    const identity = preferred.map(key => lookup.get(key.toLowerCase().replace(/[^a-z0-9]/g,''))).find(value => value !== undefined && value !== null && value !== '');
-    return `${edge.relationship_type}:${String(identity ?? edge.target_title ?? '').trim().toLowerCase()}`;
-  }
-  function comparisonConnections(branches) {
-    const shared = new Map();
-    const uniqueByBranch = new Map();
-    for (const branch of branches) {
-      const seen = new Set();
-      for (const edge of visibleConnections(branch)) {
-        const key = connectionIdentity(edge);
-        if (!key || seen.has(key)) continue;
-        seen.add(key);
-        if (!shared.has(key)) shared.set(key, {edge, branches:[]});
-        shared.get(key).branches.push(branch.branch_name);
-      }
-    }
-    const common = [...shared.values()].filter(item => item.branches.length > 1);
-    for (const branch of branches) {
-      const rows = [];
-      const seen = new Set();
-      for (const edge of visibleConnections(branch)) {
-        const key = connectionIdentity(edge);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const item = shared.get(key);
-        if (item?.branches.length === 1) rows.push(edge);
-      }
-      uniqueByBranch.set(branch.branch_code, rows);
-    }
-    const commonRows = common.map(item => `<tr><th scope="row">${escapeHtml(niceRelationshipLabel(item.edge.relationship_type, item.edge.relationship_label))}</th><td>${escapeHtml(item.edge.target_title || 'Connected record')}</td><td>${escapeHtml(item.branches.join(', '))}</td></tr>`).join('');
-    const sharedMarkup = common.length
-      ? `<div class="table-scroll"><table class="data-table" aria-label="Connections shared by selected branches"><caption class="visually-hidden">Connections shared by selected branches</caption><thead><tr><th scope="col">Relationship</th><th scope="col">Shared connection</th><th scope="col">Branches</th></tr></thead><tbody>${commonRows}</tbody></table></div>`
-      : '<p class="small-note">The selected branches do not share a neighbourhood, ward, service or facility connection in the graph.</p>';
-    const uniqueMarkup = branches.map(branch => {
-      const edges = uniqueByBranch.get(branch.branch_code) || [];
-      return `<details class="branch-connection-details"><summary><strong>${escapeHtml(branch.branch_name)}</strong><span>${number(edges.length)} branch-specific connections</span></summary>${edges.length ? connectionGroups(edges) : '<p class="small-note">No branch-specific connections in the selected categories.</p>'}</details>`;
-    }).join('');
-    return `<section class="branch-explorer-block"><h3>Shared connections</h3>${sharedMarkup}</section><section class="branch-explorer-block"><h3>Branch-specific connections</h3>${uniqueMarkup}</section>`;
+    const pairMarkup=pairs.length
+      ? `<div class="table-scroll"><table class="data-table" aria-label="Pairwise relationships between selected branches"><caption class="visually-hidden">Pairwise relationships between selected branches</caption><thead><tr><th scope="col">Branch Pair</th><th scope="col">Shared Neighbourhood</th><th scope="col">Shared Ward</th><th scope="col">Shared Services</th></tr></thead><tbody>${pairs.map(pair=>`<tr><th scope="row">${escapeHtml(pair.left)} / ${escapeHtml(pair.right)}</th><td>${pair.neighbourhoods.length?escapeHtml(pair.neighbourhoods.join(', ')):'None'}</td><td>${pair.wards.length?escapeHtml(pair.wards.join(', ')):'None'}</td><td>${pair.services.length?`${number(pair.services.length)}: ${escapeHtml(pair.services.join(', '))}`:'None'}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="small-note">Select at least two branches to compare their relationships.</p>';
+
+    const allServices=[...new Set(branches.flatMap(branch=>edgeNames(branch,'OFFERS_SERVICE')))].sort((a,b)=>a.localeCompare(b));
+    const matrix=allServices.map(service=>{
+      const offered=branches.filter(branch=>edgeNames(branch,'OFFERS_SERVICE').some(name=>name.toLowerCase()===service.toLowerCase()));
+      return {service,offered};
+    });
+    const matrixMarkup=matrix.length
+      ? `<div class="table-scroll"><table class="data-table" aria-label="Service distribution across selected branches"><caption class="visually-hidden">Service distribution across selected branches</caption><thead><tr><th scope="col">Service</th>${branches.map(branch=>`<th scope="col">${escapeHtml(branch.branch_name)}</th>`).join('')}<th scope="col">Branch Coverage</th></tr></thead><tbody>${matrix.map(item=>`<tr><th scope="row">${escapeHtml(item.service)}</th>${branches.map(branch=>`<td>${item.offered.some(found=>found.branch_code===branch.branch_code)?'Reported':'—'}</td>`).join('')}<td>${number(item.offered.length)} / ${number(branches.length)}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="small-note">No reported service relationships were found for the selected branches.</p>';
+
+    const commonPairs=pairs.filter(pair=>pair.neighbourhoods.length||pair.wards.length||pair.services.length).length;
+    const branchOnlyServices=matrix.filter(item=>item.offered.length===1);
+    const commonServices=matrix.filter(item=>item.offered.length===branches.length);
+    const takeaways=[];
+    takeaways.push(`${commonPairs} of ${pairs.length} branch pairs have at least one shared neighbourhood, ward or service connection.`);
+    if(commonServices.length)takeaways.push(`${commonServices.length} reported ${commonServices.length===1?'service is':'services are'} offered by every selected branch.`);
+    if(branchOnlyServices.length)takeaways.push(`${branchOnlyServices.length} reported ${branchOnlyServices.length===1?'service appears':'services appear'} at only one selected branch.`);
+    return `<ul class="branch-explorer-takeaways">${takeaways.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul><section class="branch-explorer-block"><h3>How Selected Branches Connect</h3>${pairMarkup}</section><section class="branch-explorer-block"><h3>Reported Service Distribution</h3>${matrixMarkup}</section>`;
   }
   async function installExplorer(target, mode, selectedCodes) {
-    if (!target || !selectedCodes.length) return;
-    const currentKey = selectedCodes.join(',');
-    const existing = target.querySelector(':scope > #branch-explorer');
-    if (existing && existing.dataset.mode === mode && existing.dataset.selection === currentKey) return;
-    existing?.remove();
-    const section = createSection('branch-explorer', 'Branch Explorer', mode === 'comparison'
-      ? 'Explore shared and branch-specific neighbourhood, ward, service and facility connections for the selected branches.'
-      : 'Explore the selected branch’s neighbourhood, ward, service and facility connections.');
-    section.dataset.mode = mode;
-    section.dataset.selection = currentKey;
-    section.innerHTML += '<div class="branch-explorer-summary" aria-live="polite" aria-atomic="true"><p class="small-note" role="status">Loading branch connections…</p></div><div class="branch-explorer-connections" aria-live="polite" aria-atomic="true"></div>';
-    target.append(section);
-    const summary = section.querySelector('.branch-explorer-summary');
-    const connections = section.querySelector('.branch-explorer-connections');
-    try {
-      const graph = await getJSON(`/relate/explorer?branch_codes=${encodeURIComponent(selectedCodes.join(','))}`);
-      summary.innerHTML = explorerSummary(graph);
-      const branches = (graph.selected || []).filter(branch => selectedCodes.includes(branch.branch_code));
-      if (mode === 'comparison') {
-        if (branches.length < 2) {
-          connections.innerHTML = '<p class="small-note">Select at least two branches to explore their connected context.</p>';
-          return;
-        }
-        connections.innerHTML = comparisonConnections(branches);
-        return;
-      }
-      const branch = branches[0];
-      if (!branch) {
-        connections.innerHTML = '<p class="small-note">The selected branch could not be found in the graph.</p>';
-        return;
-      }
-      const edges = visibleConnections(branch);
-      connections.innerHTML = `<div class="graph-root-node"><strong>${escapeHtml(branch.branch_name)}</strong></div>${edges.length ? connectionGroups(edges) : '<p class="small-note">No neighbourhood, ward, service or facility connections were found for this branch.</p>'}`;
-    } catch (error) {
-      summary.innerHTML = `<p class="notice error" role="alert">${escapeHtml(error.message || 'The Branch Explorer could not be loaded.')}</p>`;
-      connections.innerHTML = '';
+    if (!target) return;
+    const codes=(selectedCodes||[]).filter(Boolean);
+    if(mode==='comparison'&&codes.length<2){
+      target.querySelector(':scope > #branch-explorer')?.remove();
+      target.innerHTML='<p class="small-note">Select at least two branches to explore their shared neighbourhoods, wards and reported services.</p>';
+      return;
     }
+    if(!codes.length)return;
+    const currentKey=codes.join(',');
+    const existing=target.querySelector(':scope > #branch-explorer');
+    if(existing&&existing.dataset.mode===mode&&existing.dataset.selection===currentKey)return;
+    existing?.remove();
+    const section=createSection('branch-explorer','Branch Explorer',mode==='comparison'
+      ? 'Compare shared neighbourhoods, wards and reported services across the selected branches.'
+      : 'See which branches share the selected branch’s local area and how reported services compare.');
+    section.dataset.mode=mode;
+    section.dataset.selection=currentKey;
+    section.innerHTML+='<div class="branch-explorer-summary" aria-live="polite" aria-atomic="true"><p class="small-note" role="status">Loading connected branch insights…</p></div>';
+    target.append(section);
+    const summary=section.querySelector('.branch-explorer-summary');
+    try{
+      const graph=await getJSON(`/relate/explorer?branch_codes=${encodeURIComponent(codes.join(','))}`);
+      const selected=(graph.selected||[]).filter(branch=>codes.includes(branch.branch_code));
+      if(mode==='comparison'){
+        if(selected.length<2){summary.innerHTML='<p class="small-note">The selected branches could not all be found in the graph.</p>';return;}
+        summary.innerHTML=pairwiseInsights(selected);
+      }else{
+        const branch=selected[0];
+        if(!branch){summary.innerHTML='<p class="notice error" role="alert">The selected branch could not be found in the graph.</p>';return;}
+        summary.innerHTML=branchExplorerInsights(branch);
+      }
+    }catch(error){summary.innerHTML=`<p class="notice error" role="alert">${escapeHtml(error.message||'The Branch Explorer could not be loaded.')}</p>`;}
   }
 
   let enhancementTimer;
-  let enhancing = false;
-  let enhanceAgain = false;
-  function enhance() {
+  let enhancing=false;
+  let enhanceAgain=false;
+  function enhance(){
     clearTimeout(enhancementTimer);
-    enhancementTimer = setTimeout(async () => {
-      if (enhancing) {
-        enhanceAgain = true;
-        return;
-      }
-      enhancing = true;
-      try {
-        if (page === 'overview') {
-          // Activity intensity remains in the annual metric view. The graph explorer is not useful here.
-          const panel = document.querySelector('#overview-panel-2 .ranking-metric-panel:not([hidden])');
-          if (panel) await installIntensity(panel, 'overview', [], panel.dataset.metric || 'circulation');
-        } else if (page === 'branches') {
-          const profile = document.querySelector('#branch-profile');
-          const content = profile?.querySelector('.profile-render-content');
-          const code = profile?.dataset.branchCode || '';
-          if (content && code && !profile.querySelector('.profile-loading-overlay')) {
-            const activityPanel = content.querySelector('#branch-panel-1');
-            if (activityPanel) await installIntensity(activityPanel, 'branch', [code]);
-            const explorerHost = content.querySelector('#branch-explorer-host');
-            if (explorerHost) await installExplorer(explorerHost, 'branch', [code]);
-          }
-        } else if (page === 'comparisons') {
-          const result = document.querySelector('#comparison-results');
-          if (result?.querySelector('.tabs[aria-label="comparison-main"]')) {
-            const codes = [...document.querySelectorAll('#compare-list input[type="checkbox"]:checked')].map(item=>item.value);
-            const metricPanel = result.querySelector('#comparison-main-panel-0 > .tab-panel:not([hidden])');
-            if (metricPanel) await installIntensity(metricPanel, 'comparison', codes, metricPanel.dataset.metric || 'circulation');
-            if (codes.length >= 2) await installExplorer(result, 'comparison', codes);
+    enhancementTimer=setTimeout(async()=>{
+      if(enhancing){enhanceAgain=true;return;}
+      enhancing=true;
+      try{
+        if(page==='branches'){
+          const profile=document.querySelector('#branch-profile');
+          const content=profile?.querySelector('.profile-render-content');
+          const code=profile?.dataset.branchCode||'';
+          const explorerHost=content?.querySelector('#branch-explorer-host');
+          if(content&&code&&explorerHost&&!profile.querySelector('.profile-loading-overlay'))await installExplorer(explorerHost,'branch',[code]);
+        }else if(page==='comparisons'){
+          const result=document.querySelector('#comparison-results');
+          const explorerHost=result?.querySelector('#comparison-explorer-host');
+          if(explorerHost){
+            const codes=[...document.querySelectorAll('#compare-list input[type="checkbox"]:checked')].map(item=>item.value);
+            await installExplorer(explorerHost,'comparison',codes);
           }
         }
-      } finally {
-        enhancing = false;
-        if (enhanceAgain) {
-          enhanceAgain = false;
-          enhance();
-        }
+      }finally{
+        enhancing=false;
+        if(enhanceAgain){enhanceAgain=false;enhance();}
       }
-    }, 100);
+    },100);
   }
-
-  const observer = new MutationObserver(() => { enhance(); });
-  observer.observe(root, {childList:true, subtree:true});
-  document.addEventListener('change', event => {
-    if (event.target.matches('#compare-list input[type="checkbox"]')) enhance();
-  });
-  document.addEventListener('click', event => {
-    if (event.target.closest('.tabs[aria-label="annual-metric"]') || event.target.closest('.tabs[aria-label="comparison-year"]')) enhance();
-  });
+  const observer=new MutationObserver(()=>enhance());
+  observer.observe(root,{childList:true,subtree:true});
+  document.addEventListener('change',event=>{if(event.target.matches('#compare-list input[type="checkbox"]'))enhance();});
   enhance();
 })();

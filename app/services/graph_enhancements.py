@@ -155,6 +155,64 @@ def _node_summary(labels: list[str], props: dict[str, Any]) -> str:
     return str(values.get("name") or values.get("branchname") or label or "Connected record")
 
 
+def _peer_branches_in_shared_areas(connection, branch_label: str, branch_props: dict[str, str], branch_code: str, schema: dict[str, dict[str, str]]) -> list[dict[str, Any]]:
+    """Find other branches connected to the selected branch through its ward or neighbourhood."""
+    code_property = branch_props.get("branchcode")
+    if not code_property:
+        return []
+    contexts = (
+        ("neighbourhood", "IN_NEIGHBOURHOOD", NEIGHBOURHOOD_LABEL),
+        ("ward", "IN_WARD", WARD_LABEL),
+    )
+    peers: dict[str, dict[str, Any]] = {}
+    service_available = SERVICE_LABEL in schema
+    for context_type, relationship, area_label in contexts:
+        if area_label not in schema:
+            continue
+        service_match = f"OPTIONAL MATCH (peer)-[:{_quote('OFFERS_SERVICE')}]->(service:{_quote(SERVICE_LABEL)})" if service_available else ""
+        service_return = "collect(properties(service)) AS service_properties" if service_available else "[] AS service_properties"
+        query = (
+            f"MATCH (anchor:{_quote(branch_label)})-[:{_quote(relationship)}]->(area:{_quote(area_label)})"
+            f"<-[:{_quote(relationship)}]-(peer:{_quote(branch_label)}) "
+            f"WHERE toLower(toString(anchor.{_quote(code_property)})) = $branch_code "
+            f"AND toLower(toString(peer.{_quote(code_property)})) <> $branch_code "
+            f"{service_match} "
+            f"RETURN properties(area) AS area_properties, properties(peer) AS peer_properties, {service_return}"
+        )
+        try:
+            rows = _rows(connection.execute(query, {"branch_code": branch_code.casefold()}))
+        except Exception:
+            # Older stores may not yet have the explicit peer-path relationships.
+            continue
+        for row in rows:
+            branch_data = row.get("peer_properties") or {}
+            peer_code = _branch_value(branch_data, ("BranchCode", "Code"))
+            peer_name = _branch_value(branch_data, ("BranchName", "Name")) or peer_code
+            if not peer_code:
+                continue
+            area_data = row.get("area_properties") or {}
+            area_name = _branch_value(area_data, ("name", "NeighbourhoodName", "WardName"))
+            area_number = _branch_value(area_data, ("neighbourhood_no", "ward_no"))
+            if context_type == "ward":
+                context_name = f"{area_name} (Ward {area_number})" if area_name and area_number else area_name or (f"Ward {area_number}" if area_number else "Ward not named")
+            else:
+                context_name = f"{area_name} (No. {area_number})" if area_name and area_number else area_name or (f"Neighbourhood {area_number}" if area_number else "Neighbourhood not named")
+            key = peer_code.casefold()
+            peer = peers.setdefault(key, {"branch_code": peer_code, "branch_name": peer_name, "contexts": [], "services": []})
+            context = {"context_type": context_type, "context_name": context_name}
+            if context not in peer["contexts"]:
+                peer["contexts"].append(context)
+            service_names = set(peer["services"])
+            for props in row.get("service_properties") or []:
+                if not isinstance(props, dict):
+                    continue
+                name = _branch_value(props, ("service_name", "facility_name", "name"))
+                if name:
+                    service_names.add(name)
+            peer["services"] = sorted(service_names, key=str.casefold)
+    return sorted(peers.values(), key=lambda item: item["branch_name"].casefold())
+
+
 def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
     """Return an inspectable summary of the persistent graph and selected branch paths."""
     connection = open_graph(read_only=True)
@@ -210,12 +268,16 @@ def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
                     "properties": props,
                     "relationship_properties": _safe_properties(row.get("relationship_properties")),
                 })
+            peer_branches = _peer_branches_in_shared_areas(
+                connection, branch_label, branch_props, branch["code"], schema
+            )
             selected.append({
                 "branch_code": branch["code"],
                 "branch_name": branch["name"],
                 "labels": [branch_label],
                 "properties": branch_properties,
                 "connections": edges,
+                "peer_branches": peer_branches,
             })
         return {
             "available": True,

@@ -3,60 +3,95 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_overview_does_not_mount_branch_explorer():
-    source = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
-    overview = source.split("if (page === 'overview')", 1)[1].split("} else if (page === 'branches')", 1)[0]
-    assert "installExplorer" not in overview
-
-
-def test_branch_explorer_is_after_forecast_and_uses_selected_branch():
-    app = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
-    enhancements = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
-    assert "['Branch information','Activity','Forecast','Branch Explorer','Ask a question','Programs']" in app
-    assert 'id="branch-explorer-host"' in app
-    assert "profile?.dataset.branchCode" in enhancements
-    assert "installExplorer(explorerHost, 'branch', [code])" in enhancements
-    assert "relate-branch-select" not in enhancements
-
-
-def test_branch_explorer_hides_branch_properties_annual_records_and_events():
-    source = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
-    assert "branch.properties" not in source
-    assert "HAS_CIRCULATION_RECORD" not in source
-    assert "HAS_VISITS_RECORD" not in source
-    assert "HAS_WORKSTATION_RECORD" not in source
-    assert "HAS_REGISTRATION_RECORD" not in source
-    assert "HOSTS_EVENT" not in source
-    assert "IN_NEIGHBOURHOOD" in source
-    assert "IN_WARD" in source
-    assert "OFFERS_SERVICE" in source
-    assert "HAS_FACILITY" in source
-    assert "graph.store" not in source
-
-
-def test_branch_comparison_explorer_uses_all_selected_branches():
-    source = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
-    assert "comparisonConnections(branches)" in source
-    assert "installExplorer(result, 'comparison', codes)" in source
-    assert "Shared connections" in source
-    assert "Branch-specific connections" in source
-
-
-def test_branch_details_include_requested_fields_before_website():
+def test_all_tabs_and_subtabs_use_title_case_labels():
     source = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
-    fields = ["['Hours',hoursMarkup]", "['Public Parking',parkingValue]", "['Neighbourhood',b.neighbourhood]", "['Ward',b.ward]", "['Website',b.website"]
+    assert "function titleCaseTabLabel(value)" in source
+    assert "esc(titleCaseTabLabel(item))" in source
+
+
+def test_overview_renames_annual_metric_to_branch_overview():
+    source = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    overview = source.split("async function renderOverview() {", 1)[1].split("function branchPicker(", 1)[0]
+    assert "'Branch Overview'" in overview
+    assert "'Annual metric'" not in overview
+
+
+def test_branch_overview_uses_one_reporting_year_filter_for_rankings_and_area_chart():
+    source = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    assert 'branch-overview-year' in source
+    assert '<option value="all" selected>All Years</option>' in source
+    assert "branchOverviewResults(data,panel.dataset.metric,select.value)" in source
+    assert "branchTotals(data,metric,selectedYears)" in source
+    assert "branchActivitySizeChart(data,metric,selectedYears)" in source
+    assert "Total across selected reporting years" in source
+    assert "Reporting Year: %{customdata[2]}" in source
+    assert "Measure:" not in source
+    assert "activity-size-year" not in source
+
+
+def test_location_map_defaults_to_all_reporting_years():
+    source = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    overview = source.split("async function renderOverview() {", 1)[1].split("function branchPicker(", 1)[0]
+    assert '<option value="all" selected>All Years</option>${renderYearOptions(years,\'\')}' in overview
+    assert "if(year==='all')" in source
+
+
+def test_activity_intensity_is_not_rendered_in_any_section():
+    source = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
+    app = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    assert "installIntensity" not in source
+    assert "Activity Intensity" not in source
+    assert "Highest branch intensity" not in source
+    assert "activityForecast" in app
+
+
+def test_branch_information_contains_reported_services_after_ward_and_before_website():
+    source = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    fields = ["['Hours',hoursMarkup]", "['Public Parking',parkingValue]", "['Neighbourhood',b.neighbourhood]", "['Ward',b.ward]", "['Reported Services',{html:servicesMarkup}]", "['Website',b.website"]
     positions = [source.index(field) for field in fields]
     assert positions == sorted(positions)
-
-    backend = (ROOT / "main.py").read_text(encoding="utf-8")
-    for field in ('"hours"', '"public_parking"', '"neighbourhood"', '"ward"'):
-        assert field in backend
+    assert "reported-services-heading" not in source.split("async function loadProfile", 1)[1].split("function bindQuestionForm", 1)[0]
 
 
-def test_explorer_summary_uses_human_readable_labels_and_only_useful_categories():
+def test_branch_insights_combines_activity_and_forecast_and_retains_explorer_order():
+    source = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    branch = source.split("async function loadProfile(", 1)[1].split("function bindQuestionForm", 1)[0]
+    assert "['Branch Information','Activity & Forecast','Branch Explorer','Ask A Question','Programs']" in branch
+    assert 'id="branch-panel-1"' in branch and '${activityForecast}' in branch
+    assert 'id="branch-panel-2"' in branch and 'id="branch-explorer-host"' in branch
+    assert "tabsMarkup(['Branch information','Activity','Forecast'" not in branch
+
+
+def test_comparison_branch_explorer_is_its_own_subtab():
+    app = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    enhancements = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
+    assert "tabsMarkup(['Annual Metrics','Branch Information','Branch Explorer'],'comparison-main')" in app
+    assert 'id="comparison-main-panel-2"' in app
+    assert 'id="comparison-explorer-host"' in app
+    assert "result?.querySelector('#comparison-explorer-host')" in enhancements
+    assert "pairwiseInsights(selected)" in enhancements
+
+
+def test_branch_explorer_shows_local_peer_and_service_coverage_insights_without_generic_cards():
+    app = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
+    backend = (ROOT / "app/services/graph_enhancements.py").read_text(encoding="utf-8")
+    assert "function branchExplorerInsights(branch)" in app
+    assert "Branches In The Same Area" in app
+    assert "Local Service Coverage" in app
+    assert "How Selected Branches Connect" in app
+    assert "Reported Service Distribution" in app
+    assert "graph.node_count" not in app
+    assert "graph.relationship_count" not in app
+    assert '"peer_branches": peer_branches' in backend
+    assert "IN_NEIGHBOURHOOD" in backend and "IN_WARD" in backend
+
+
+def test_overview_and_programs_events_do_not_mount_branch_explorer():
     source = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
-    assert "function humanizeIdentifier(value)" in source
-    assert "explorerNodeTypes.has(item.label)" in source
-    assert "explorerRelationshipTypes.has(item.type)" in source
-    assert "Branch directory" in source
-    assert "Located in neighbourhood" in source
+    assert "page==='overview'" not in source
+    assert "page==='events'" not in source
+
+
+def test_accessibility_validator_and_docs_are_present():
+    assert (ROOT / "scripts/validate_accessibility.py").is_file()
+    assert (ROOT / "ACCESSIBILITY_VALIDATION.md").is_file()

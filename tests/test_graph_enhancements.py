@@ -333,3 +333,50 @@ def test_branch_qna_finds_shared_services_with_peers_in_selected_ward():
     assert "IN_WARD" in combined
     assert "OFFERS_SERVICE" in combined
     assert "anchor_code" in combined
+
+
+def test_peer_branch_traversal_returns_shared_area_and_service_context():
+    class Cursor:
+        def __init__(self, rows):
+            self._rows = rows
+        def fetchall(self):
+            return self._rows
+
+    class Connection:
+        def __init__(self):
+            self.queries = []
+        def execute(self, statement, params=None):
+            self.queries.append(statement)
+            if "IN_NEIGHBOURHOOD" in statement:
+                return Cursor([{
+                    "area_properties": {"name": "Northview", "neighbourhood_no": 11},
+                    "peer_properties": {"BranchCode": "B2", "BranchName": "Beta Branch"},
+                    "service_properties": [
+                        {"service_name": "Youth Hub"},
+                        {"service_name": "Digital Innovation Hub"},
+                    ],
+                }])
+            return Cursor([])
+
+    connection = Connection()
+    schema = {
+        "BranchGeneralInformation": {"branchcode": "BranchCode", "branchname": "BranchName"},
+        "LibraryNeighbourhood": {"name": "name", "neighbourhoodno": "neighbourhood_no"},
+        "LibraryWard": {"name": "name", "wardno": "ward_no"},
+        "LibraryService": {"servicekey": "service_key", "servicename": "service_name"},
+    }
+    result = graph._peer_branches_in_shared_areas(
+        connection,
+        "BranchGeneralInformation",
+        schema["BranchGeneralInformation"],
+        "A1",
+        schema,
+    )
+
+    assert len(result) == 1
+    assert result[0]["branch_code"] == "B2"
+    assert result[0]["branch_name"] == "Beta Branch"
+    assert result[0]["contexts"] == [{"context_type": "neighbourhood", "context_name": "Northview (No. 11)"}]
+    assert result[0]["services"] == ["Digital Innovation Hub", "Youth Hub"]
+    assert any("IN_NEIGHBOURHOOD" in query for query in connection.queries)
+    assert any("IN_WARD" in query for query in connection.queries)
