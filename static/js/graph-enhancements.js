@@ -1,5 +1,5 @@
-/* LibraryTO judge-facing Relate Explorer and activity-intensity panels.
-   Uses only the application's existing branch and annual metric records. */
+/* Read-only Relate Explorer and activity-intensity panels.
+   All derived values use the repository's existing CSV snapshots. */
 (() => {
   'use strict';
 
@@ -16,6 +16,7 @@
   let branchListPromise;
   const number = value => value == null || !Number.isFinite(Number(value)) ? '—' : new Intl.NumberFormat('en-CA', {maximumFractionDigits: 2}).format(Number(value));
   const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+
   async function getJSON(url) {
     const response = await fetch(url, {headers:{'Accept':'application/json'}, cache:'no-store'});
     const payload = await response.json().catch(() => ({}));
@@ -42,7 +43,7 @@
       const rows = years.map(item => `<tr><th scope="row">${escapeHtml(item.year)}</th><td>${number(item.network_per_1000_sq_ft)}</td><td>${number(item.branches_with_values)}</td></tr>`).join('');
       const latest = years[years.length - 1];
       const top = (latest.branch_values || []).slice(0, 10).map(item => `<tr><th scope="row">${escapeHtml(item.name)}</th><td>${number(item.per_1000_sq_ft)}</td><td>${number(item.activity)}</td><td>${number(item.square_footage)}</td></tr>`).join('');
-      return `<div class="intensity-summary"><p><strong>Network intensity</strong> is total reported activity divided by the square footage of branches with a reported value for that year.</p><div class="table-scroll"><table class="data-table"><thead><tr><th>Year</th><th>Activity per 1,000 sq ft</th><th>Branches included</th></tr></thead><tbody>${rows}</tbody></table></div><h3>Highest branch intensity · ${escapeHtml(latest.year)}</h3><div class="table-scroll"><table class="data-table"><thead><tr><th>Branch</th><th>Per 1,000 sq ft</th><th>Annual activity</th><th>Area (sq ft)</th></tr></thead><tbody>${top || '<tr><td colspan="4">No branch values available.</td></tr>'}</tbody></table></div></div>`;
+      return `<div class="intensity-summary"><p><strong>Network intensity</strong> is total reported activity divided by the square footage of branches with a reported value for that year.</p><div class="table-scroll"><table class="data-table" aria-label="Network activity intensity by year"><caption class="visually-hidden">Network activity intensity by year</caption><thead><tr><th scope="col">Year</th><th scope="col">Activity per 1,000 sq ft</th><th scope="col">Branches included</th></tr></thead><tbody>${rows}</tbody></table></div><h3>Highest branch intensity · ${escapeHtml(latest.year)}</h3><div class="table-scroll"><table class="data-table" aria-label="Branches with highest activity intensity"><caption class="visually-hidden">Branches with highest activity intensity in ${escapeHtml(latest.year)}</caption><thead><tr><th scope="col">Branch</th><th scope="col">Per 1,000 sq ft</th><th scope="col">Annual activity</th><th scope="col">Area (sq ft)</th></tr></thead><tbody>${top || '<tr><td colspan="4">No branch values available.</td></tr>'}</tbody></table></div></div>`;
     }
     const selected = new Set(codes || []);
     const rows = [];
@@ -56,8 +57,9 @@
         if (matches.length) rows.push(`<tr><th scope="row">${escapeHtml(year.year)}</th>${codes.map(code => {const m=matches.find(item=>item.code===code);return `<td>${number(m?.per_1000_sq_ft)}</td>`;}).join('')}</tr>`);
       }
     }
-    const headers = mode === 'branch' ? '<th>Year</th><th>Per 1,000 sq ft</th><th>Annual activity</th><th>Area (sq ft)</th>' : `<th>Year</th>${codes.map(code => `<th>${escapeHtml(code)}</th>`).join('')}`;
-    return `<div class="table-scroll"><table class="data-table"><thead><tr>${headers}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${mode === 'branch' ? 4 : codes.length+1}">No branch values available.</td></tr>`}</tbody></table></div>`;
+    const headers = mode === 'branch' ? '<th scope="col">Year</th><th scope="col">Per 1,000 sq ft</th><th scope="col">Annual activity</th><th scope="col">Area (sq ft)</th>' : `<th scope="col">Year</th>${codes.map(code => `<th scope="col">${escapeHtml(code)}</th>`).join('')}`;
+    const caption = mode === 'branch' ? 'Selected branch activity intensity by year' : 'Selected branch activity intensity comparison by year';
+    return `<div class="table-scroll"><table class="data-table" aria-label="${caption}"><caption class="visually-hidden">${caption}</caption><thead><tr>${headers}</tr></thead><tbody>${rows.join('') || `<tr><td colspan="${mode === 'branch' ? 4 : codes.length+1}">No branch values available.</td></tr>`}</tbody></table></div>`;
   }
 
   async function installIntensity(target, mode, codes, forcedMetric = null) {
@@ -67,10 +69,10 @@
     const existing = target.querySelector(`:scope > #${sectionId}`);
     if (existing && existing.dataset.selection === selectionKey) return;
     existing?.remove();
-    const section = createSection(sectionId, 'Activity per 1,000 sq ft', 'Compare reported annual activity relative to branch floor area. This is a size-normalized measure, not a measure of efficiency.');
+    const section = createSection(sectionId, 'Activity Intensity', 'Annual activity per 1,000 square feet, calculated from the supplied branch area and annual records. This is a size-normalized measure, not a measure of efficiency.');
     section.dataset.selection = selectionKey;
-    const controlMarkup = forcedMetric ? '' : `<div class="intensity-controls"><label for="${mode}-intensity-metric">Measure</label><select class="control" id="${mode}-intensity-metric">${Object.entries(metricLabels).map(([key,label]) => `<option value="${key}">${escapeHtml(label)}</option>`).join('')}</select></div>`;
-    section.innerHTML += `${controlMarkup}<div class="intensity-result" aria-live="polite"><p class="small-note">Loading activity intensity…</p></div>`;
+    const controlMarkup = forcedMetric ? '' : `<div class="intensity-controls"><label for="${mode}-intensity-metric">Annual metric</label><select class="control" id="${mode}-intensity-metric">${Object.entries(metricLabels).map(([key,label]) => `<option value="${key}">${escapeHtml(label)}</option>`).join('')}</select></div>`;
+    section.innerHTML += `${controlMarkup}<div class="intensity-result" aria-live="polite" aria-atomic="true"><p class="small-note" role="status">Loading activity intensity…</p></div>`;
     target.append(section);
     const resultHost = section.querySelector('.intensity-result');
     const select = forcedMetric ? null : section.querySelector('select');
@@ -80,7 +82,7 @@
       select?.addEventListener('change', draw);
       draw();
     } catch (error) {
-      resultHost.innerHTML = `<p class="notice error">${escapeHtml(error.message || 'Activity intensity is unavailable.')}</p>`;
+      resultHost.innerHTML = `<p class="notice error" role="alert">${escapeHtml(error.message || 'Activity intensity is unavailable.')}</p>`;
     }
   }
 
@@ -90,7 +92,7 @@
   function propertyTable(properties) {
     const entries = Object.entries(properties || {}).filter(([key,value]) => value !== null && value !== '');
     if (!entries.length) return '<p class="small-note">No additional properties are stored on this node.</p>';
-    return `<div class="table-scroll"><table class="data-table graph-property-table"><tbody>${entries.map(([key,value])=>`<tr><th scope="row">${escapeHtml(key)}</th><td>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : value)}</td></tr>`).join('')}</tbody></table></div>`;
+    return `<div class="table-scroll"><table class="data-table graph-property-table" aria-label="Stored graph node properties"><caption class="visually-hidden">Stored graph node properties</caption><tbody>${entries.map(([key,value])=>`<tr><th scope="row">${escapeHtml(key)}</th><td>${escapeHtml(typeof value === 'object' ? JSON.stringify(value) : value)}</td></tr>`).join('')}</tbody></table></div>`;
   }
 
   async function installExplorer(target, mode, selectedCodes) {
@@ -99,10 +101,10 @@
     const existing = target.querySelector(':scope > #relate-explorer');
     if (existing && existing.dataset.mode === mode && existing.dataset.selection === currentKey) return;
     existing?.remove();
-    const section = createSection('relate-explorer', 'Relate Explorer', 'Inspect the persisted graph: branch nodes, typed relationships and the records connected to a selected branch.');
+    const section = createSection('relate-explorer', 'Relate Explorer', 'Inspect the persistent graph, typed relationships and records connected to a physical branch.');
     section.dataset.mode = mode;
     section.dataset.selection = currentKey;
-    section.innerHTML += `<div class="relate-explorer-controls"><label for="relate-branch-select">Branch</label><select class="control" id="relate-branch-select"><option value="">Choose a branch</option></select><button class="button secondary" type="button" id="relate-refresh">Refresh graph</button></div><div class="relate-explorer-summary" aria-live="polite"><p class="small-note">Loading graph summary…</p></div><div class="relate-explorer-connections" aria-live="polite"></div>`;
+    section.innerHTML += `<div class="relate-explorer-controls"><label for="relate-branch-select">Branch</label><select class="control" id="relate-branch-select"><option value="">Choose a branch</option></select><button class="button secondary" type="button" id="relate-refresh">Refresh graph</button></div><div class="relate-explorer-summary" aria-live="polite" aria-atomic="true"><p class="small-note" role="status">Loading graph summary…</p></div><div class="relate-explorer-connections" aria-live="polite" aria-atomic="true"></div>`;
     target.append(section);
     const select = section.querySelector('#relate-branch-select');
     const summary = section.querySelector('.relate-explorer-summary');
@@ -113,15 +115,12 @@
       const options = allowed.map(code => `<option value="${escapeHtml(code)}">${escapeHtml(branchLabel(branches,code))}</option>`).join('');
       select.innerHTML = `<option value="">${mode === 'overview' ? 'Choose a branch to inspect' : 'Choose a selected branch'}</option>${options}`;
       if (selectedCodes.length) select.value = selectedCodes[0];
-      if (!allowed.length) {
-        summary.innerHTML = '<p class="small-note">Choose branches above before inspecting their connections.</p>';
-      }
       async function load(code) {
-        connections.innerHTML = '<p class="small-note">Loading connected records…</p>';
+        connections.innerHTML = '<p class="small-note" role="status">Loading connected records…</p>';
         try {
           const params = code ? `?branch_codes=${encodeURIComponent(code)}` : '';
           const graph = await getJSON(`/relate/explorer${params}`);
-          summary.innerHTML = `<div class="graph-stat-line"><span><strong>${number(graph.node_count)}</strong><small>nodes</small></span><span><strong>${number(graph.relationship_count)}</strong><small>relationships</small></span><span><strong>${escapeHtml(graph.store)}</strong><small>persistent store · ${escapeHtml(graph.mode)}</small></span></div><div class="graph-summary-tables"><div class="table-scroll"><h3>Node labels</h3><table class="data-table"><thead><tr><th>Label</th><th>Nodes</th></tr></thead><tbody>${(graph.node_counts||[]).map(item=>`<tr><th>${escapeHtml(item.label)}</th><td>${number(item.count)}</td></tr>`).join('')}</tbody></table></div><div class="table-scroll"><h3>Relationship types</h3><table class="data-table"><thead><tr><th>Relationship</th><th>Edges</th></tr></thead><tbody>${(graph.relationship_counts||[]).map(item=>`<tr><th>${escapeHtml(item.label)}</th><td>${number(item.count)}</td></tr>`).join('') || '<tr><td colspan="2">No relationships have been created. Run the graph build script.</td></tr>'}</tbody></table></div></div>`;
+          summary.innerHTML = `<div class="graph-stat-line"><span><strong>${number(graph.node_count)}</strong><small>nodes</small></span><span><strong>${number(graph.relationship_count)}</strong><small>relationships</small></span><span><strong>${escapeHtml(graph.store)}</strong><small>persistent store · ${escapeHtml(graph.mode)}</small></span></div><div class="graph-summary-tables"><div class="table-scroll"><h3>Node labels</h3><table class="data-table" aria-label="Relate node label counts"><caption class="visually-hidden">Relate node label counts</caption><thead><tr><th scope="col">Label</th><th scope="col">Nodes</th></tr></thead><tbody>${(graph.node_counts||[]).map(item=>`<tr><th scope="row">${escapeHtml(item.label)}</th><td>${number(item.count)}</td></tr>`).join('')}</tbody></table></div><div class="table-scroll"><h3>Relationship types</h3><table class="data-table" aria-label="Relate relationship counts"><caption class="visually-hidden">Relate relationship counts</caption><thead><tr><th scope="col">Relationship</th><th scope="col">Edges</th></tr></thead><tbody>${(graph.relationship_counts||[]).map(item=>`<tr><th scope="row">${escapeHtml(item.label)}</th><td>${number(item.count)}</td></tr>`).join('') || '<tr><td colspan="2">No relationships have been created. Run the graph build script.</td></tr>'}</tbody></table></div></div>`;
           const branch = (graph.selected||[])[0];
           if (!code) {
             connections.innerHTML = '<p class="small-note">Select a branch to inspect the records connected to it.</p>';
@@ -143,61 +142,73 @@
               const by = String(b.properties?.Year ?? b.properties?.FiscalYear ?? '');
               return ay.localeCompare(by, undefined, {numeric:true});
             });
-            return `<section class="graph-relationship-group"><h4>${escapeHtml(group.label)} <span>${number(group.edges.length)}</span></h4><div class="graph-node-list">${group.edges.map((edge,index)=>`<details class="graph-node-details"><summary><span class="graph-edge-type">${escapeHtml(type)}</span><strong>${escapeHtml(edge.target_title)}</strong><small>${escapeHtml((edge.target_labels||[]).join(' · '))}</small></summary><div class="graph-node-inspection"><h5>Connected node properties</h5>${propertyTable(edge.properties)}${Object.keys(edge.relationship_properties||{}).length?`<h5>Relationship properties</h5>${propertyTable(edge.relationship_properties)}`:''}</div></details>`).join('')}</div></section>`;
+            return `<section class="graph-relationship-group"><h4>${escapeHtml(group.label)} <span>${number(group.edges.length)}</span></h4><div class="graph-node-list">${group.edges.map(edge=>`<details class="graph-node-details"><summary><span class="graph-edge-type">${escapeHtml(type)}</span><strong>${escapeHtml(edge.target_title)}</strong><small>${escapeHtml((edge.target_labels||[]).join(' · '))}</small></summary><div class="graph-node-inspection"><h5>Connected node properties</h5>${propertyTable(edge.properties)}${Object.keys(edge.relationship_properties||{}).length?`<h5>Relationship properties</h5>${propertyTable(edge.relationship_properties)}`:''}</div></details>`).join('')}</div></section>`;
           }).join('');
-          connections.innerHTML = `<div class="graph-root-node"><span>Selected branch node</span><strong>${escapeHtml(branch.branch_name)}</strong><small>BranchCode: ${escapeHtml(branch.branch_code)}</small></div><section class="graph-branch-properties"><h4>Branch node properties</h4>${propertyTable(branch.properties)}</section>${orderedGroups || '<p class="small-note">No outgoing relationships were found for this branch.</p>'}`;
+          connections.innerHTML = `<div class="graph-root-node"><span>Selected branch node</span><strong>${escapeHtml(branch.branch_name)}</strong><small>BranchCode: ${escapeHtml(branch.branch_code)}</small></div><section class="graph-branch-properties"><h3>Branch node properties</h3>${propertyTable(branch.properties)}</section>${orderedGroups || '<p class="small-note">No outgoing relationships were found for this branch.</p>'}`;
         } catch (error) {
-          connections.innerHTML = `<p class="notice error">${escapeHtml(error.message || 'The graph could not be explored.')}</p>`;
+          connections.innerHTML = `<p class="notice error" role="alert">${escapeHtml(error.message || 'The graph could not be explored.')}</p>`;
         }
       }
       select.addEventListener('change', () => load(select.value));
       section.querySelector('#relate-refresh').addEventListener('click', () => load(select.value));
       await load(select.value);
     } catch (error) {
-      summary.innerHTML = `<p class="notice error">${escapeHtml(error.message || 'Branch list unavailable.')}</p>`;
+      summary.innerHTML = `<p class="notice error" role="alert">${escapeHtml(error.message || 'Branch list unavailable.')}</p>`;
     }
   }
 
   let enhancementTimer;
-  async function enhance() {
+  let enhancing = false;
+  let enhanceAgain = false;
+  function enhance() {
     clearTimeout(enhancementTimer);
     enhancementTimer = setTimeout(async () => {
-      if (page === 'overview') {
-        const panel = document.querySelector('#overview-panel-2 > .ranking-metric-panel:not([hidden])');
-        if (panel) await installIntensity(panel, 'overview', [], panel.dataset.metric || 'circulation');
-        await installExplorer(root, 'overview', []);
-      } else if (page === 'branches') {
-        const profile = document.querySelector('#branch-profile');
-        const content = profile?.querySelector('.profile-render-content');
-        const code = profile?.dataset.branchCode || '';
-        if (content && code && !profile.querySelector('.profile-loading-overlay')) {
-          const activityPanel = content.querySelector('#branch-panel-1');
-          if (activityPanel) await installIntensity(activityPanel, 'branch', [code]);
-          await installExplorer(profile, 'branch', [code]);
-        } else if (profile && !content) {
-          await installExplorer(profile, 'branch', []);
+      if (enhancing) {
+        enhanceAgain = true;
+        return;
+      }
+      enhancing = true;
+      try {
+        if (page === 'overview') {
+          // ranking-metric panels are nested inside an analysis section, not direct children.
+          const panel = document.querySelector('#overview-panel-2 .ranking-metric-panel:not([hidden])');
+          if (panel) await installIntensity(panel, 'overview', [], panel.dataset.metric || 'circulation');
+          await installExplorer(root, 'overview', []);
+        } else if (page === 'branches') {
+          const profile = document.querySelector('#branch-profile');
+          const content = profile?.querySelector('.profile-render-content');
+          const code = profile?.dataset.branchCode || '';
+          if (content && code && !profile.querySelector('.profile-loading-overlay')) {
+            const activityPanel = content.querySelector('#branch-panel-1');
+            if (activityPanel) await installIntensity(activityPanel, 'branch', [code]);
+            await installExplorer(profile, 'branch', [code]);
+          }
+        } else if (page === 'comparisons') {
+          const result = document.querySelector('#comparison-results');
+          if (result?.querySelector('.tabs[aria-label="comparison-main"]')) {
+            const codes = [...document.querySelectorAll('#compare-list input[type="checkbox"]:checked')].map(item=>item.value);
+            const metricPanel = result.querySelector('#comparison-main-panel-0 > .tab-panel:not([hidden])');
+            if (metricPanel) await installIntensity(metricPanel, 'comparison', codes, metricPanel.dataset.metric || 'circulation');
+            await installExplorer(result, 'comparison', codes);
+          }
         }
-      } else if (page === 'comparisons') {
-        const result = document.querySelector('#comparison-results');
-        if (result?.querySelector('.tabs[aria-label="comparison-main"]')) {
-          const codes = [...document.querySelectorAll('#compare-list input[type="checkbox"]:checked')].map(item=>item.value);
-          const metricPanel = result.querySelector('#comparison-main-panel-0 > .tab-panel:not([hidden])');
-          if (metricPanel) await installIntensity(metricPanel, 'comparison', codes, metricPanel.dataset.metric || 'circulation');
-          await installExplorer(result, 'comparison', codes);
-        } else if (result && !result.querySelector('#relate-explorer')) {
-          await installExplorer(result, 'comparison', []);
+      } finally {
+        enhancing = false;
+        if (enhanceAgain) {
+          enhanceAgain = false;
+          enhance();
         }
       }
-    }, 120);
+    }, 100);
   }
 
-  const observer = new MutationObserver(enhance);
+  const observer = new MutationObserver(() => { enhance(); });
   observer.observe(root, {childList:true, subtree:true});
   document.addEventListener('change', event => {
     if (event.target.matches('#compare-list input[type="checkbox"]')) enhance();
   });
   document.addEventListener('click', event => {
-    if (event.target.closest('.tabs[aria-label="ranking"]') || event.target.closest('.tabs[aria-label="comparison-year"]')) enhance();
+    if (event.target.closest('.tabs[aria-label="annual-metric"]') || event.target.closest('.tabs[aria-label="comparison-year"]')) enhance();
   });
   enhance();
 })();

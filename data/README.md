@@ -25,10 +25,9 @@ The original `Load_relate_db.ipynb` records the initial CSV-to-node import. The 
 
 ```bash
 python scripts/build_relate_graph.py
-python scripts/validate_relate_graph.py
 ```
 
-The builder creates and validates a staging `.rl` file before replacing the persistent store. Stop the application before rebuilding so the single-file store is not open by another process.
+The builder creates and validates a staging `.rl` file before replacing the persistent store. The separate `scripts/validate_relate_graph.py` command is available for an additional post-build check. Stop the application before rebuilding so the single-file store is not open by another process.
 
 CSV snapshots are read locally and cached by the application. There are no live API calls or external data refreshes. Rebuild the graph after changing any source snapshot, then commit the regenerated `tpl_library_graph.rl` with the matching CSV changes.
 

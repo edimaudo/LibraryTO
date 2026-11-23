@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="Explore Toronto Public Library branch information, annual activity and programs.">
+  <meta name="description" content="Explore Toronto Public Library branches, annual activity, services, programs and connected context.">
   <meta name="theme-color" content="#f4f6f7">
   <title>{{ title }} · LibraryTO</title>
   <link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700&display=swap" data-inter-font onload="this.onload=null;this.rel='stylesheet'">
   <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;450;500;550;600;650;700&display=swap"></noscript>
   <link rel="stylesheet" href="{{ url_for('static', path='/css/app.css') }}?v={{ static_version }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='/css/graph-enhancements.css') }}?v={{ static_version }}">
 </head>
 <body>
   <a class="skip-link" href="#main">Skip to main content</a>
@@ -61,5 +62,6 @@
   </div>
 
   <script src="{{ url_for('static', path='/js/app.js') }}?v={{ static_version }}" defer></script>
+  <script src="{{ url_for('static', path='/js/graph-enhancements.js') }}?v={{ static_version }}" defer></script>
 </body>
 </html>

@@ -188,21 +188,6 @@ function serviceTierCharts(data) {
     return `<article class="panel">${chart(METRICS[metric],traces,{height:310},`${METRICS[metric]} by library type`)}</article>`;
   }).join('');
 }
-function correlations(data) {
-  const keys=Object.keys(METRICS), series={};
-  keys.forEach(key=>{series[key]=new Map();(data.annual_values?.[key]||[]).forEach(year=>data.branches.forEach(branch=>{
-    const value=year.values?.[branch.code];if(value!==null&&value!==undefined&&Number.isFinite(Number(value)))series[key].set(`${branch.code}:${year.year}`,Number(value));
-  }));});
-  const z=[];
-  keys.forEach(a=>{const row=[];keys.forEach(b=>{
-    const av=[],bv=[];series[a].forEach((value,key)=>{if(series[b].has(key)){av.push(value);bv.push(series[b].get(key));}});
-    if(av.length<2){row.push(null);return;}
-    const ma=av.reduce((x,y)=>x+y,0)/av.length,mb=bv.reduce((x,y)=>x+y,0)/bv.length;
-    let numerator=0,da=0,db=0;av.forEach((v,i)=>{const x=v-ma,y=bv[i]-mb;numerator+=x*y;da+=x*x;db+=y*y;});
-    row.push(da&&db?numerator/Math.sqrt(da*db):null);
-  });z.push(row);});
-  return chart('Correlation', [{type:'heatmap',x:keys.map(k=>METRICS[k]),y:keys.map(k=>METRICS[k]),z,zmin:-1,zmax:1,zmid:0,colorscale:'RdBu',reversescale:true,hovertemplate:'%{y} × %{x}<br>Pearson correlation: %{z:.2f}<extra></extra>',colorbar:{title:'Pearson correlation'}}],{height:460,margin:{l:180,r:85,t:65,b:185},xaxis:{tickangle:-25,automargin:true,tickfont:{size:10}},yaxis:{autorange:'reversed',automargin:true},showlegend:false});
-}
 function branchTotals(data,metric) {
   const totals=new Map(),counts=new Map();
   (data.annual_values?.[metric]||[]).forEach(year=>data.branches.forEach(branch=>{
@@ -218,29 +203,46 @@ function rankingMetricPanel(data,metric,index) {
     const trace={type:'bar',orientation:'h',x:items.map(x=>x.value),y:items.map(x=>x.branch.name),marker:{color:'#286b83'},
       customdata:items.map(x=>[x.branch.code,tierName(x.branch.service_tier_code),x.observations]),
       hovertemplate:'%{y}<br>Total reported: %{x:,.0f}<br>Branch code: %{customdata[0]}<br>%{customdata[1]}<extra></extra>'};
-    return chart('',[trace],{height:400,margin:{l:160,r:28,t:28,b:65},title:{text:''},
+    return chart('',[trace],{height:390,margin:{l:160,r:28,t:26,b:65},title:{text:''},
       xaxis:{rangemode:'tozero',title:'Total across available reporting years'},
       yaxis:{autorange:'reversed',automargin:true},showlegend:false},label);
   };
-  return `<section id="ranking-panel-${index}" class="tab-panel ranking-metric-panel" role="tabpanel" aria-labelledby="ranking-tab-${index}" ${index?'hidden':''}>
-    <section class="rank-chart-section"><h3>Top 10 branches</h3>${build(rows.slice(-10).reverse(),`Top 10 branches by ${METRICS[metric]}`)}</section>
-    <section class="rank-chart-section"><h3>Bottom 10 branches</h3>${build(rows.slice(0,10),`Bottom 10 branches by ${METRICS[metric]}`)}</section>
+  const years=(data.annual_values?.[metric]||[]).map(row=>String(row.year));
+  const selectedYear=years[years.length-1]||'';
+  return `<section id="annual-metric-panel-${index}" data-metric="${esc(metric)}" class="tab-panel ranking-metric-panel" role="tabpanel" aria-labelledby="annual-metric-tab-${index}" ${index?'hidden':''}>
+    <div class="grid-2 ranking-charts">
+      <section class="rank-chart-section"><h3>Top 10 branches</h3>${build(rows.slice(-10).reverse(),`Top 10 branches by ${METRICS[metric]}`)}</section>
+      <section class="rank-chart-section"><h3>Bottom 10 branches</h3>${build(rows.slice(0,10),`Bottom 10 branches by ${METRICS[metric]}`)}</section>
+    </div>
+    <section class="rank-chart-section branch-size-section">
+      <div class="branch-size-heading"><div><h3>Annual activity and branch area</h3><p class="small-note">Measure: ${esc(METRICS[metric])}</p></div><div class="form-field"><label for="activity-size-year-${index}">Reporting year</label><select id="activity-size-year-${index}" class="control activity-size-year">${years.map(year=>`<option value="${esc(year)}" ${year===selectedYear?'selected':''}>${esc(year)}</option>`).join('')}</select></div></div>
+      <div class="activity-size-chart">${years.length?branchActivitySizeChart(data,metric,selectedYear):empty('No annual values are available for this measure.')}</div>
+    </section>
   </section>`;
+}
+function branchActivitySizeChart(data,metric,year) {
+  const annual=(data.annual_values?.[metric]||[]).find(row=>String(row.year)===String(year));
+  if(!annual)return empty('No annual values are available for this reporting year.');
+  const rows=(data.branches||[]).filter(branch=>Number(branch.square_footage)>0&&annual.values?.[branch.code]!==null&&annual.values?.[branch.code]!==undefined);
+  if(!rows.length)return empty('No branches have both a reported annual value and floor area for this year.');
+  const tiers=['DL','NL','RR','Other'];
+  const traces=tiers.map(code=>{
+    const items=rows.filter(branch=>(branch.service_tier_code||'Other')===code);
+    return {type:'scatter',mode:'markers',name:tierName(code),x:items.map(branch=>Number(branch.square_footage)),y:items.map(branch=>Number(annual.values[branch.code])),
+      customdata:items.map(branch=>[branch.name,branch.code,Number(annual.values[branch.code])/Number(branch.square_footage)*1000]),
+      marker:{size:10,color:TIER_COLORS[code]||TIER_COLORS.Other},
+      hovertemplate:`%{customdata[0]}<br>%{customdata[1]}<br>Year: ${esc(year)}<br>Branch area: %{x:,.0f} sq ft<br>${esc(METRICS[metric])}: %{y:,.0f}<br>Activity per 1,000 sq ft: %{customdata[2]:,.2f}<extra></extra>`};
+  }).filter(trace=>trace.x.length);
+  return chart(`${METRICS[metric]} and branch area · ${year}`,traces,{height:390,margin:{l:82,r:25,t:58,b:100},
+    xaxis:{title:{text:'Branch area (sq ft)',standoff:14},rangemode:'tozero'},
+    yaxis:{title:METRICS[metric],rangemode:'tozero'},
+    legend:{orientation:'h',y:-.3,yanchor:'top',x:.5,xanchor:'center'}});
 }
 function rankingTabs(data) {
   const keys=Object.keys(METRICS);
-  return `${tabsMarkup(keys.map(metric=>METRICS[metric]),'ranking')}${keys.map((metric,index)=>rankingMetricPanel(data,metric,index)).join('')}`;
+  return `${tabsMarkup(keys.map(metric=>METRICS[metric]),'annual-metric')}${keys.map((metric,index)=>rankingMetricPanel(data,metric,index)).join('')}`;
 }
-function footprintCharts(data) {
-  return Object.keys(METRICS).map(metric=>{
-    const rows=branchTotals(data,metric).filter(x=>Number(x.branch.square_footage)>0);
-    const traces=['DL','NL','RR'].map(code=>{
-      const items=rows.filter(x=>x.branch.service_tier_code===code);
-      return {type:'scatter',mode:'markers',name:tierName(code),x:items.map(x=>Number(x.branch.square_footage)),y:items.map(x=>x.value),customdata:items.map(x=>[x.branch.name,x.branch.code,x.observations]),marker:{size:10,color:TIER_COLORS[code]},hovertemplate:'%{customdata[0]}<br>%{customdata[1]}<br>Area: %{x:,.0f} sq ft<br>Total reported value: %{y:,.0f}<br>Reporting years: %{customdata[2]}<extra></extra>'};
-    }).filter(t=>t.x.length);
-    return `<article class="panel footprint-panel">${chart(`${METRICS[metric]} vs. Square Footage`,traces,{height:390,margin:{l:72,r:25,t:58,b:150},xaxis:{title:{text:'Square footage',standoff:16},rangemode:'tozero'},yaxis:{title:'Total',rangemode:'tozero'},legend:{orientation:'h',y:-.43,yanchor:'top',x:.5,xanchor:'center',traceorder:'normal'}})}</article>`;
-  }).join('');
-}
+
 function popup(branch) {
   const services=(branch.services||[]).length?`<ul>${branch.services.map(x=>`<li>${esc(x)}</li>`).join('')}</ul>`:'Not listed';
   const phone=String(branch.telephone||'').trim();
@@ -291,30 +293,36 @@ async function renderOverview() {
   const metrics=Object.keys(METRICS);
   const stats=metrics.map(key=>`<article class="stat"><span>${esc(METRICS[key])}</span><strong>${fmt(data.totals?.[key])}</strong><small>${data.latest_years?.[key]?`Latest report: ${esc(data.latest_years[key])}`:'No values reported'}</small></article>`).join('')+`<article class="stat"><span>Physical branches</span><strong>${fmt(data.branch_count)}</strong><small>Library locations</small></article>`;
   const activity=metrics.map(key=>`<article class="activity-chart">${chart(METRICS[key],[lineTrace(data.trend?.[key]||[],METRICS[key],'#286b83')],{height:300})}</article>`).join('');
-  const correlationText="It describes the direction and strength of a linear relationship between two measures. Values close to 1 indicate a strong positive relationship; values close to -1 indicate a strong negative relationship; values near 0 indicate little linear relationship.";
-  const correlation=`<section class="analysis-section correlation-section"><h2>Pearson correlation</h2>${correlations(data)}<p class="small-note correlation-explanation">${esc(correlationText)}</p></section>`;
   const tiers=serviceTierCharts(data);
-  const footprint=footprintCharts(data);
   const locations=`<div class="map-toolbar"><label for="map-metric-select">Metrics</label><select class="control" id="map-metric-select">${metrics.map(k=>`<option value="${k}">${esc(METRICS[k])}</option>`).join('')}</select><label for="map-year-select">Year</label><select class="control" id="map-year-select">${renderYearOptions(years,selected)}</select></div><div id="branch-map" class="map" role="region" aria-label="Map of Toronto Public Library physical branches"></div><div class="map-legend" aria-label="Metric value legend"><span>Lower metric value</span><span class="map-legend-ramp" aria-hidden="true"></span><span>Higher metric value</span></div>`;
   const panels=[
-    `<section id="overview-panel-0" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-0"><div class="grid-2">${activity}</div>${correlation}</section>`,
+    `<section id="overview-panel-0" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-0"><div class="grid-2">${activity}</div></section>`,
     `<section id="overview-panel-1" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-1" hidden><div class="grid-2">${tiers}</div></section>`,
     `<section id="overview-panel-2" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-2" hidden>
-      <section class="analysis-section"><h2>Top 10 and bottom 10 branches</h2><p class="small-note">Rankings use each branch's total reported value across the available reporting years.</p>${rankingTabs(data)}</section>
-      <section class="analysis-section"><h2>Annual activity and branch area</h2><div class="grid-2">${footprint}</div></section>
+      <section class="analysis-section branch-analysis-section">${rankingTabs(data)}</section>
     </section>`,
     `<section id="overview-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-3" hidden><section class="location-section">${locations}</section></section>`
   ].join('');
   host.innerHTML=`
     <section class="overview-question analysis-section"><h2>Ask a question</h2><form id="overview-question-form" class="question-form"><label class="visually-hidden" for="overview-question">Your question</label><div class="question-controls"><input id="overview-question" class="control" type="text" maxlength="500" required placeholder="Ask about any branch, its details, services, facilities or activity"><button class="button" type="submit">Ask</button></div></form><div id="overview-answer" aria-live="polite"></div></section>
     <section class="stats-grid" aria-label="Annual network summary">${stats}</section>
-    ${tabsMarkup(['Annual activity','Service tiers','Branch analysis','Location'],'overview')}${panels}`;
+    ${tabsMarkup(['Annual activity','Service tiers','Annual metric','Location'],'overview')}${panels}`;
+  host.addEventListener('change',event=>{
+    const select=event.target.closest('.activity-size-year');
+    if(!select)return;
+    const panel=select.closest('.ranking-metric-panel');
+    const chartHost=panel?.querySelector('.activity-size-chart');
+    if(!panel||!chartHost)return;
+    if(window.Plotly)$$('.plotly-chart',chartHost).forEach(el=>{try{Plotly.purge(el);}catch(_){} });
+    chartHost.innerHTML=branchActivitySizeChart(data,panel.dataset.metric,select.value);
+    drawCharts(chartHost);
+  });
+  bindQuestionForm('#overview-question-form','#overview-question','#overview-answer',null);
   attachTabs(host,(panel,index)=>{
-    if(index===3){const mapEl=$('#branch-map');if(mapEl&&!mapEl.dataset.ready)createMap('branch-map',data.branches,data.annual_values,years);else requestAnimationFrame(()=>maps.get('branch-map')?.invalidateSize());}
+    if(index===3 && panel.id==='overview-panel-3'){const mapEl=$('#branch-map');if(mapEl&&!mapEl.dataset.ready)createMap('branch-map',data.branches,data.annual_values,years);else requestAnimationFrame(()=>maps.get('branch-map')?.invalidateSize());}
   });
   await drawCharts($('#overview-panel-0'));
   if(!$('#overview-panel-3').hidden)createMap('branch-map',data.branches,data.annual_values,years);
-  bindQuestionForm('#overview-question-form','#overview-question','#overview-answer',null);
 }
 
 function branchPicker(branches,initial) {
@@ -327,6 +335,7 @@ function branchPicker(branches,initial) {
 let branchProfileSequence=0;
 async function loadProfile(code) {
   const pane=$('#branch-profile');if(!pane)return;
+  pane.dataset.branchCode=code;
   const sequence=++branchProfileSequence;
   pane.setAttribute('aria-busy','true');
   pane.innerHTML=loadingMarkup('Loading branch information…','profile-loading-state');
@@ -410,7 +419,7 @@ async function renderComparisons() {
         const palette=['#0072B2','#D55E00','#009E73','#CC79A7','#6C757D'];
         const traces=data.branches.map((branch,index)=>({type:'scatter',mode:'lines+markers',name:branch.name,x:rows.map(row=>String(row.year)),y:rows.map(row=>row.values?.[branch.code]??null),connectgaps:false,line:{width:2.6,color:palette[index]},marker:{size:6},hovertemplate:'%{x}<br>%{y:,.0f}<extra></extra>'}));
         const chartView=rows.length?chart(METRICS[metric],traces,{height:380,margin:{l:70,r:25,t:60,b:90},legend:{orientation:'h',y:-.25}}):empty(`No annual ${METRICS[metric].toLowerCase()} records are available for these branches.`);
-        return `<section id="comparison-year-panel-${i}" class="tab-panel" role="tabpanel" aria-labelledby="comparison-year-tab-${i}" ${i?'hidden':''}>${chartView}${rows.length?details(METRICS[metric],['Year',...data.branches.map(x=>x.name)],rows.map(row=>[row.year,...data.branches.map(branch=>fmt(row.values?.[branch.code]))])):''}</section>`;
+        return `<section id="comparison-year-panel-${i}" data-metric="${metric}" class="tab-panel" role="tabpanel" aria-labelledby="comparison-year-tab-${i}" ${i?'hidden':''}>${chartView}${rows.length?details(METRICS[metric],['Year',...data.branches.map(x=>x.name)],rows.map(row=>[row.year,...data.branches.map(branch=>fmt(row.values?.[branch.code]))])):''}</section>`;
       }).join('');
       const infoRows=data.branches.map(b=>[b.name,b.code,b.type_of_library||b.service_tier,b.year_opened||'—',b.address||'—',b.postal_code||'—',fmt(b.square_footage),fmt(b.workstations),b.telephone||'—',b.website||'—']);
       const services=Array.from(new Set(data.branches.flatMap(b=>b.services||[]))).sort();

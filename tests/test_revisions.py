@@ -819,19 +819,17 @@ def test_overview_qna_filters_branch_count_by_human_readable_service_tier(snapsh
     assert "Virtual One" not in result["answer"]
 
 
-def test_overview_prompt_and_pearson_correlation_copy_are_clean():
+def test_overview_annual_metric_layout_has_no_pearson_correlation():
     from pathlib import Path
 
     root = Path(__file__).resolve().parents[1]
     js = (root / "static/js/app.js").read_text(encoding="utf-8")
-    assert "Ask across physical branches or name one" not in js
-    assert "chart('Correlation'" in js
-    assert "colorbar:{title:'Pearson correlation'}" in js
-    assert "Pearson correlation: %{z:.2f}" in js
-    assert "<h2>Pearson correlation</h2>" in js
-    assert "Understanding r." not in js
-    assert "r is Pearson's correlation coefficient" not in js
-    assert "It describes the direction and strength of a linear relationship between two measures." in js
+    assert "function correlations(data)" not in js
+    assert "Pearson correlation" not in js
+    assert "Annual metric" in js
+    assert "Annual activity and branch area" in js
+    assert "branchActivitySizeChart(data,metric,selectedYear)" in js
+
 
 
 def test_branch_insights_has_loading_spinner_for_initial_data_and_chart_rendering():

@@ -19,12 +19,14 @@ from app.config import DATA_DIR, ROOT
 from app.services.analytics import METRICS, branch_detail, branch_forecasts, compare, overview, recommend_events, event_filter_options
 from app.services.data_store import branch_records, dataset_status, event_records, observations, data_revision
 from app.services.relate import RelateUnavailable, ask as relate_ask, graph_status
+from app.routes.graph_features import router as graph_features_router
 
-app = FastAPI(title="LibraryTO", version="1.1.0", description="Explore Toronto Public Library branch information, activity and programs.", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="LibraryTO", version="1.2.0", description="Explore Toronto Public Library branch information, activity and connected context.", docs_url=None, redoc_url=None, openapi_url=None)
+app.include_router(graph_features_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 # Bump on source changes because static assets are served with immutable caching.
-STATIC_VERSION = "20261121-3"
+STATIC_VERSION = "20261123-1"
 
 
 class AskRequest(BaseModel):

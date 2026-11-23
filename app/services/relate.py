@@ -1132,6 +1132,13 @@ def _answer_metric_trend(connection, schema, metric: str, branch: dict[str, Any]
 
 
 def _answer_metric_ranking(connection, schema, metric: str, year: str | None, question: str = "") -> dict[str, Any]:
+    """Rank annual branch observations across the requested reporting period.
+
+    If a year is supplied, rank within that year. If the question explicitly
+    requests the latest/most recent year, use the latest year. Otherwise a
+    yearless question compares all available branch-year observations and
+    reports the highest (or lowest) annual record with its reporting year.
+    """
     found = _label_for_metric(schema, metric)
     if not found:
         return _not_found(f"The Relate graph does not contain annual {METRIC_SPECS[metric]['noun']} records.")
@@ -1139,7 +1146,7 @@ def _answer_metric_ranking(connection, schema, metric: str, year: str | None, qu
     value_key = _first_key(properties, METRIC_SPECS[metric]["value_aliases"])
     rows = _nodes(connection, label, properties, year=year, limit=5000)
     eligible = _eligible_codes()
-    values_by_year: dict[str, dict[str, tuple[float, dict[str, Any]]]] = {}
+    records_by_key: dict[tuple[str, str], dict[str, Any]] = {}
     actual_years: set[str] = set()
     for props in rows:
         if not is_physical_branch(props):
@@ -1147,36 +1154,103 @@ def _answer_metric_ranking(connection, schema, metric: str, year: str | None, qu
         normalized = _normalised_properties(props)
         code = str(next((normalized.get(alias) for alias in BRANCH_CODE_ALIASES if normalized.get(alias) not in (None, "")), "")).strip()
         branch_item = eligible.get(code.casefold())
-        value = number(props.get(value_key))
-        record_year = str(next((normalized.get(alias) for alias in YEAR_ALIASES if normalized.get(alias) not in (None, "")), "")).strip()
+        value = number(props.get(value_key)) if value_key else None
+        raw_year = next((normalized.get(alias) for alias in YEAR_ALIASES if normalized.get(alias) not in (None, "")), None)
+        year_match = re.search(r"(?:19|20)\d{2}", str(raw_year or ""))
+        record_year = year_match.group(0) if year_match else ""
         if not branch_item or value is None or not record_year:
             continue
-        if year and record_year != year:
+        if year and record_year != str(year):
             continue
         actual_years.add(record_year)
-        values_by_year.setdefault(record_year, {})[branch_item["code"]] = (float(value), props)
-    if not actual_years:
+        records_by_key[(branch_item["code"], record_year)] = {
+            "code": branch_item["code"],
+            "name": branch_item["name"],
+            "year": record_year,
+            "value": float(value),
+            "properties": props,
+        }
+    if not records_by_key:
         return _not_found(f"No annual {METRIC_SPECS[metric]['noun']} values were found for {year or 'the available reporting years'}.")
-    chosen_year = year or max(actual_years, key=lambda item: (int(item) if item.isdigit() else 0, item))
-    selected_year_values = values_by_year.get(chosen_year, {})
-    rows_for_year = [(code, payload[0], payload[1]) for code, payload in selected_year_values.items()]
-    lowest = bool(re.search(r"\b(lowest|least|fewest|smallest)\b", _normalise_question(question)))
-    rows_for_year.sort(key=lambda item: item[1], reverse=not lowest)
-    top_match = re.search(r"\btop\s+(\d{1,2})\b", _normalise_question(question))
+
+    q = _normalise_question(question)
+    latest_requested = bool(re.search(r"\b(latest|most recent|last reported|current year)\b", q))
+    if year:
+        chosen_year = str(year)
+        period_records = [item for item in records_by_key.values() if item["year"] == chosen_year]
+    elif latest_requested:
+        chosen_year = max(actual_years, key=int)
+        period_records = [item for item in records_by_key.values() if item["year"] == chosen_year]
+    else:
+        chosen_year = None
+        period_records = list(records_by_key.values())
+
+    lowest = bool(re.search(r"\b(lowest|least|fewest|smallest)\b", q))
+    period_records.sort(key=lambda item: (item["value"], int(item["year"]), item["name"].casefold()), reverse=not lowest)
+    top_match = re.search(r"\btop\s+(\d{1,2})\b", q)
     limit = max(1, min(int(top_match.group(1)), 10)) if top_match else 1
-    selected = rows_for_year[:limit]
-    details = [
-        {"label": eligible[item[0].casefold()]["name"], "value": _display_number(item[1])}
-        for item in selected
-    ]
-    leading = "lowest" if lowest else "highest"
-    answer = f"In {chosen_year}, the {leading} {METRIC_SPECS[metric]['noun']} among physical branches" + (" were" if len(selected) > 1 else " was") + ": " + "; ".join(f"{item['label']} ({item['value']})" for item in details) + "."
+    selected = period_records[:limit]
+    direction = "lowest" if lowest else "highest"
+    noun = METRIC_SPECS[metric]["noun"]
+
+    # Compute one branch leader for every reporting year so the user can see
+    # how the answer changes over time, even when the overall maximum is in an
+    # earlier year than the latest dataset year.
+    yearly_leaders = []
+    if not year and not latest_requested:
+        for reporting_year in sorted(actual_years, key=int):
+            year_rows = [item for item in records_by_key.values() if item["year"] == reporting_year]
+            year_rows.sort(key=lambda item: (item["value"], item["name"].casefold()), reverse=not lowest)
+            if year_rows:
+                yearly_leaders.append(year_rows[0])
+
+    if chosen_year:
+        lead = selected[0]
+        answer = (
+            f"In {chosen_year}, the {direction} annual {noun} among physical branches was "
+            f"{lead['name']} ({_display_number(lead['value'])})."
+        )
+        details = [{"label": "Branch", "value": lead["name"]},
+                   {"label": "Annual value", "value": _display_number(lead["value"])},
+                   {"label": "Reporting year", "value": chosen_year}]
+    else:
+        lead = selected[0]
+        answer = (
+            f"Across all available reporting years, the {direction} annual {noun} was "
+            f"{lead['name']} ({_display_number(lead['value'])}) in {lead['year']}."
+        )
+        if yearly_leaders:
+            annual_summary = "; ".join(
+                f"{item['year']}: {item['name']} ({_display_number(item['value'])})"
+                for item in yearly_leaders
+            )
+            answer += f" {direction.capitalize()} branch by reporting year: {annual_summary}."
+        details = [{"label": "Branch with highest annual record" if not lowest else "Branch with lowest annual record", "value": lead["name"]},
+                   {"label": "Annual value", "value": _display_number(lead["value"])},
+                   {"label": "Reporting year", "value": lead["year"]}]
+        details.extend({"label": f"{item['year']} annual leader", "value": f"{item['name']} · {_display_number(item['value'])}"} for item in yearly_leaders)
+
+    if limit > 1:
+        answer += " Ranked records: " + "; ".join(
+            f"{item['name']} ({_display_number(item['value'])}, {item['year']})" for item in selected
+        ) + "."
+        details.extend({"label": f"Rank {index + 1}", "value": f"{item['name']} · {_display_number(item['value'])} · {item['year']}"} for index, item in enumerate(selected))
+
     return {
-        "status": "ok", "answer": answer,
-        "highlights": [{"title": f"{leading.capitalize()} {METRICS_LABELS[metric]}", "category": chosen_year, "details": details}],
-        "evidence": [{"labels": [label], "properties": item[2], "connections": []} for item in selected],
-        "direct_intent": True, "scope_verified": True, "network_scope": True,
+        "status": "ok",
+        "answer": answer,
+        "highlights": [{
+            "title": f"{direction.capitalize()} {METRICS_LABELS[metric]}",
+            "category": chosen_year or "All available reporting years",
+            "details": details,
+        }],
+        "evidence": [{"labels": [label], "properties": item["properties"], "connections": []} for item in (yearly_leaders or selected)],
+        "direct_intent": True,
+        "scope_verified": True,
+        "network_scope": True,
     }
+
+
 
 
 def _answer_events(question: str, branch: dict[str, Any] | None) -> dict[str, Any]:
@@ -1312,6 +1386,12 @@ def ask(question: str, branch_code: str | None = None) -> dict[str, Any]:
     connection = _open_connection()
     try:
         schema = _cached_schema(connection)
+
+        # Traverse actual Relate edges for ward, neighbourhood, service and peer questions.
+        from app.services.graph_enhancements import answer_connected_question
+        connected_answer = answer_connected_question(connection, schema, question, selected_branch)
+        if connected_answer is not None:
+            return connected_answer
 
         if oldest_branch_question:
             # A selected branch panel is never allowed to widen to a network
