@@ -107,14 +107,14 @@ def test_graph_explorer_is_an_overview_subtab_and_not_primary_navigation():
     backend = (ROOT / "app/services/graph_enhancements.py").read_text(encoding="utf-8")
     main = (ROOT / "main.py").read_text(encoding="utf-8")
     overview = app.split("async function renderOverview() {", 1)[1].split("function branchPicker(", 1)[0]
-    assert "Graph Explorer" in overview
+    assert "Library Network Explorer" in overview
     assert 'id="overview-panel-4"' in overview
     assert 'id="overview-graph-explorer"' in overview
     assert 'href="/graph-explorer"' not in template
     assert "Inspect A Branch’s Graph Connections" not in app
     assert "Node Labels" in app and "Relationship Types" in app
     assert "Browse Nodes And Properties" in app
-    assert "Branch Connections" in app
+    assert "Branch Connections" not in app
     assert '@router.get("/relate/inspect")' in api
     assert "def inspect_graph_nodes(" in backend
     assert "_physical_branch_clause" in backend
@@ -125,11 +125,13 @@ def test_graph_explorer_is_an_overview_subtab_and_not_primary_navigation():
 def test_graph_explorer_adds_nonduplicative_graph_topology_insights():
     app = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
     backend = (ROOT / "app/services/graph_enhancements.py").read_text(encoding="utf-8")
-    assert "Relationship Coverage" in app
-    assert "Most Connected Physical Branches" in app
-    assert "Neighbourhood Hubs" in app
-    assert "Ward Hubs" in app
+    assert "Relationship Coverage" not in app
+    assert "Top 10 Most Connected Branches" in app
+    assert "Top 10 Neighbourhoods" in app
+    assert "Top 10 Wards" in app
     assert '"area_hubs": area_hubs' in backend
+    assert '"service_reach": service_reach' in backend
+    assert "LIMIT 10" in backend
     assert '"relationship_coverage": coverage' in backend
     assert '"physical_branch_filter": "PhysicalBranch = 1"' in backend
 

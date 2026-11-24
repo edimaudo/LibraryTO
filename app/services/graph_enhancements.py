@@ -270,7 +270,7 @@ def _graph_insights(
         rows = _rows(connection.execute(
             f"MATCH (b:{_quote(branch_label)})-[r]->() WHERE {physical_b} "
             f"RETURN b.{_quote(code_property)} AS code, b.{_quote(name_property)} AS name, "
-            "count(r) AS connections ORDER BY connections DESC LIMIT 8"
+            "count(r) AS connections ORDER BY connections DESC LIMIT 10"
         ))
         top_branches = [
             {"code": str(row.get("code") or ""), "name": str(row.get("name") or row.get("code") or "Unknown branch"),
@@ -313,19 +313,31 @@ def _graph_insights(
             rows = _rows(connection.execute(
                 f"MATCH (b:{_quote(branch_label)})-[:{_quote(relationship_type)}]->(a:{_quote(area_label)}) "
                 f"WHERE {physical_b} RETURN properties(a) AS properties, count(DISTINCT b) AS branches "
-                "ORDER BY branches DESC LIMIT 8"
+                "ORDER BY branches DESC LIMIT 10"
             ))
         except Exception:
             continue
         for row in rows:
             properties = row.get("properties") or {}
             name = _branch_value(properties, ("name", "NeighbourhoodName", "WardName"))
-            number_value = _branch_value(properties, number_aliases)
-            if key == "wards":
-                title = f"{name} (Ward {number_value})" if name and number_value else name or (f"Ward {number_value}" if number_value else "Unlabelled ward")
-            else:
-                title = f"{name} (No. {number_value})" if name and number_value else name or (f"Neighbourhood {number_value}" if number_value else "Unlabelled neighbourhood")
+            title = name or ("Ward" if key == "wards" else "Neighbourhood")
             area_hubs[key].append({"name": title, "branches": int(row.get("branches") or 0)})
+
+    service_reach = []
+    if SERVICE_LABEL in schema and "OFFERS_SERVICE" in BRANCH_EDGE_TYPES:
+        try:
+            rows = _rows(connection.execute(
+                f"MATCH (b:{_quote(branch_label)})-[:{_quote('OFFERS_SERVICE')}]->(s:{_quote(SERVICE_LABEL)}) "
+                f"WHERE {physical_b} RETURN properties(s) AS properties, count(DISTINCT b) AS branches "
+                "ORDER BY branches DESC LIMIT 10"
+            ))
+            for row in rows:
+                properties = row.get("properties") or {}
+                service_name = _branch_value(properties, ("service_name", "name", "service"))
+                if service_name:
+                    service_reach.append({"name": service_name, "branches": int(row.get("branches") or 0)})
+        except Exception:
+            service_reach = []
 
     return {
         "physical_branches_in_directory": physical_branch_count,
@@ -337,6 +349,7 @@ def _graph_insights(
         "top_connected_branches": top_branches,
         "relationship_coverage": coverage,
         "area_hubs": area_hubs,
+        "service_reach": service_reach,
     }
 
 

@@ -184,3 +184,21 @@
 .graph-node-actions { display:flex; justify-content:flex-start; padding:.8rem 0; }
 @media(max-width:900px) { .graph-explorer-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); } .graph-insight-grid,.graph-structure-grid { grid-template-columns:1fr; } .graph-coverage-section { grid-column:auto; } }
 @media(max-width:620px) { .graph-explorer-heading { flex-direction:column; } .graph-readonly { align-self:flex-start; } .graph-explorer-kpis { grid-template-columns:repeat(2,minmax(0,1fr)); gap:.55rem; } .graph-kpi { padding:.75rem; } .graph-kpi strong { font-size:1.25rem; } .graph-node-toolbar { grid-template-columns:1fr; } .graph-node-toolbar .button { width:100%; } .graph-inspector-properties { grid-template-columns:1fr; } .graph-coverage-label,.graph-area-row,.graph-connection-summary { align-items:flex-start; flex-direction:column; gap:.15rem; } .graph-node-details > summary { grid-template-columns:1fr; gap:.1rem; padding:.35rem 0; } }
+
+/* Library Network Explorer: compact, readable judge-facing workspace. */
+.graph-explorer-shell{gap:1.25rem}
+.graph-explorer-shell>.tabs{margin:.1rem 0 .25rem}
+.graph-explorer-shell .graph-inspector-panel{padding-top:.35rem}
+.graph-insight-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:1rem}
+.graph-insight-section{border:1px solid var(--line);border-radius:3px;padding:1.1rem;background:var(--surface)}
+.graph-section-heading{margin-bottom:.7rem}
+.graph-section-heading h3{font-size:1rem;letter-spacing:-.01em}
+.graph-section-heading p{font-size:.82rem;max-width:46rem}
+.graph-insight-section .data-table{width:100%;border-collapse:collapse}
+.graph-insight-section .data-table th,.graph-insight-section .data-table td{padding:.62rem .7rem;vertical-align:top}
+.graph-insight-section .data-table tbody tr:nth-child(even){background:var(--surface-soft)}
+.graph-structure-grid{gap:1.1rem}
+.graph-structure-grid .graph-insight-section h4{margin:0 0 .75rem}
+.graph-node-toolbar{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:1rem}
+.graph-node-list{max-height:40rem;margin-top:.75rem}
+@media(max-width:900px){.graph-insight-grid,.graph-structure-grid{grid-template-columns:1fr}}
