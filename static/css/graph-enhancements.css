@@ -66,3 +66,51 @@
 .branch-explorer-block>h3{margin:0 0 .7rem;font-size:1rem;font-weight:650;}
 .branch-explorer-takeaways{margin:.25rem 0 1.25rem;padding:.8rem 1rem .8rem 2rem;border-left:3px solid var(--accent);background:var(--surface-soft);}
 .branch-explorer-takeaways li+li{margin-top:.35rem;}
+
+/* Branch Explorer: more useful local-network comparisons. */
+.branch-explorer-metrics,.graph-inspector-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1rem;margin:1rem 0 1.35rem;padding:1rem 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.branch-explorer-metrics>div,.graph-inspector-metrics>div{display:flex;flex-direction:column;gap:.2rem;min-width:0}
+.branch-explorer-metrics strong,.graph-inspector-metrics strong{font-size:1.55rem;line-height:1.2;font-variant-numeric:tabular-nums}
+.branch-explorer-metrics span,.graph-inspector-metrics span{font-size:.85rem;color:var(--muted)}
+.branch-service-reach{display:grid;gap:.85rem;max-width:62rem}
+.branch-service-reach-row{display:grid;gap:.3rem}
+.branch-service-reach-label{display:flex;justify-content:space-between;align-items:baseline;gap:1rem}
+.branch-service-reach-label strong{font-size:.92rem;font-weight:600}
+.branch-service-reach-label span,.branch-service-reach-row small{color:var(--muted);font-size:.8rem}
+.branch-service-reach-track{height:.55rem;overflow:hidden;border-radius:999px;background:var(--surface-soft)}
+.branch-service-reach-track span{display:block;height:100%;background:var(--accent);border-radius:inherit}
+.branch-service-differences{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1.2rem}
+.branch-service-differences section{padding:.85rem 0;border-top:1px solid var(--line)}
+.branch-service-differences h4{margin:0 0 .4rem;font-size:.92rem}
+.branch-service-differences p{margin:0;color:var(--muted);line-height:1.5}
+
+/* Judge-facing, read-only graph database inspector. */
+.graph-inspector-intro,.graph-inspector-section{margin-top:1.5rem;padding-top:1.25rem;border-top:1px solid var(--line)}
+.graph-inspector-intro>p{max-width:78rem;line-height:1.6}
+.graph-inspector-section>h2{margin:0 0 .7rem;font-size:1.15rem;font-weight:650}
+.graph-inspector-section>p{max-width:78rem}
+.graph-node-toolbar{display:grid;grid-template-columns:minmax(13rem,.8fr) minmax(18rem,1.4fr) auto;align-items:end;gap:.8rem;margin:1rem 0}
+.graph-node-toolbar .form-field,.graph-branch-select{margin:0}
+.graph-node-search-field{min-width:0}
+.graph-node-actions{display:flex;justify-content:flex-start;margin-top:1rem}
+.graph-node-list{max-height:58rem;overflow:auto;border-top:1px solid var(--line)}
+.graph-node-details{padding:.55rem 0;border-bottom:1px solid var(--line)}
+.graph-node-details>summary{display:grid;grid-template-columns:minmax(12rem,1fr) minmax(10rem,1fr);gap:.3rem 1rem;align-items:center;cursor:pointer;min-height:2.75rem}
+.graph-node-details>summary strong{font-weight:600;overflow-wrap:anywhere}
+.graph-node-details>summary small{color:var(--muted);overflow-wrap:anywhere}
+.graph-node-inspection{padding:.8rem 0 .4rem}
+.graph-inspector-properties{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 1.5rem;margin:0}
+.graph-inspector-properties>div{display:grid;grid-template-columns:minmax(7rem,.7fr) minmax(8rem,1.3fr);gap:.6rem;padding:.45rem 0;border-bottom:1px solid var(--line);min-width:0}
+.graph-inspector-properties dt{font-size:.82rem;font-weight:600;color:var(--muted);overflow-wrap:anywhere}
+.graph-inspector-properties dd{margin:0;font-size:.86rem;overflow-wrap:anywhere;white-space:pre-wrap}
+.graph-branch-record{margin-top:1rem}
+.graph-branch-node,.graph-branch-connections{margin:1.25rem 0}
+.graph-branch-node>h3,.graph-branch-connections>h3{margin:0 0 .35rem;font-size:1rem}
+.graph-connection-group{border-top:1px solid var(--line);padding:.55rem 0}
+.graph-connection-group:last-child{border-bottom:1px solid var(--line)}
+.graph-connection-group>summary{display:flex;justify-content:space-between;align-items:center;gap:1rem;cursor:pointer;min-height:2.7rem}
+.graph-connection-group>summary span{font-size:.82rem;color:var(--muted)}
+.graph-connection-records{padding-left:1rem}
+.graph-inspector-loading{min-height:10rem}
+@media(max-width:800px){.graph-node-toolbar{grid-template-columns:1fr 1fr}.graph-node-toolbar>.button{grid-column:1/-1;width:fit-content}.branch-explorer-metrics,.graph-inspector-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.graph-node-toolbar{grid-template-columns:1fr}.graph-node-toolbar>.button{grid-column:auto;width:100%}.graph-inspector-properties{grid-template-columns:1fr}.graph-node-details>summary{grid-template-columns:1fr}.branch-service-differences{grid-template-columns:1fr}.branch-service-reach-label{align-items:flex-start;flex-direction:column;gap:.15rem}}

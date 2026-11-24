@@ -373,6 +373,95 @@ def _year_number(value: Any) -> int | None:
     return int(match.group(1)) if match else None
 
 
+ORDINAL_WORDS = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+    "eleventh": 11, "twelfth": 12, "thirteenth": 13, "fourteenth": 14,
+    "fifteenth": 15, "sixteenth": 16, "seventeenth": 17, "eighteenth": 18,
+    "nineteenth": 19, "twentieth": 20,
+}
+
+
+def _ordinal_branch_rank(question: str) -> int | None:
+    """Return the requested ordinal for a branch opening/site-year question."""
+    q = _normalise_question(question)
+    if not re.search(r"\b(?:branch|branches|library|libraries)\b", q):
+        return None
+    if not re.search(r"\b(?:open(?:ed|ing)?|establish(?:ed|ment)?|found(?:ed|ing)?|present site|current site|year)\b", q):
+        return None
+    numeric = re.search(r"\b(\d{1,3})(?:st|nd|rd|th)\b", q)
+    if numeric:
+        rank = int(numeric.group(1))
+        return rank if rank > 0 else None
+    words = re.search(r"\b(" + "|".join(ORDINAL_WORDS) + r")\b", q)
+    return ORDINAL_WORDS.get(words.group(1)) if words else None
+
+
+def _ordinal_suffix(rank: int) -> str:
+    if 10 <= rank % 100 <= 20:
+        suffix = "th"
+    else:
+        suffix = {1: "st", 2: "nd", 3: "rd"}.get(rank % 10, "th")
+    return f"{rank}{suffix}"
+
+
+def _answer_ordinal_branch(connection, schema: dict[str, dict[str, str]], rank: int) -> dict[str, Any]:
+    """Rank branches by recorded present-site year, with alphabetical tie-breaks."""
+    found = _label_for_branch(schema)
+    if not found:
+        return _not_found("The Relate graph does not contain the branch directory needed to compare present-site years.")
+    label, properties = found
+    year_key = _first_key(properties, OPENED_YEAR_ALIASES)
+    if not year_key:
+        return _not_found("The branch directory does not contain a present-site year field.")
+
+    eligible = _eligible_codes()
+    rows = _nodes(connection, label, properties, limit=max(1000, len(eligible) * 3))
+    by_code: dict[str, tuple[int, str, dict[str, Any]]] = {}
+    for props in rows:
+        if not isinstance(props, dict) or not is_physical_branch(props):
+            continue
+        normalized = {_norm(key): value for key, value in props.items()}
+        code = str(next((normalized.get(alias) for alias in BRANCH_CODE_ALIASES if normalized.get(alias) not in (None, "")), "")).strip()
+        if not code or code.casefold() not in eligible:
+            continue
+        year = _year_number(normalized.get(_norm(year_key)))
+        if year is None:
+            continue
+        directory_branch = eligible[code.casefold()]
+        name = str(next((normalized.get(alias) for alias in BRANCH_NAME_ALIASES if normalized.get(alias)), directory_branch["name"])).strip()
+        by_code[code.casefold()] = (year, name, {**props, "BranchCode": directory_branch["code"], "BranchName": name})
+
+    candidates = sorted(by_code.values(), key=lambda item: (item[0], item[1].casefold()))
+    if rank > len(candidates):
+        return _not_found(
+            f"The requested {_ordinal_suffix(rank)} position is outside the {len(candidates)} physical branches with a recorded present-site year."
+        )
+
+    year, name, props = candidates[rank - 1]
+    same_year = [item for item in candidates if item[0] == year]
+    tie_note = " Branches with the same present-site year are ordered alphabetically by branch name." if len(same_year) > 1 else ""
+    answer = (
+        f"By recorded present-site year, the {_ordinal_suffix(rank)} branch in chronological order is {name} ({year}). "
+        "The source records the year of the current site, not necessarily when the library service first opened."
+        + tie_note
+    )
+    details = [
+        {"label": "Rank", "value": _ordinal_suffix(rank)},
+        {"label": "Branch", "value": name},
+        {"label": "Present-site year", "value": str(year)},
+        {"label": "Branches with a recorded year", "value": str(len(candidates))},
+    ]
+    if len(same_year) > 1:
+        details.append({"label": "Tie handling", "value": "Alphabetical by branch name"})
+    return {
+        "status": "ok", "answer": answer,
+        "highlights": [{"title": f"{_ordinal_suffix(rank)} branch by present-site year", "category": "Branch history", "details": details}],
+        "evidence": [{"labels": [label], "properties": props, "connections": []}],
+        "direct_intent": True, "scope_verified": True, "network_scope": True,
+    }
+
+
 def _answer_oldest_branch(connection, schema: dict[str, dict[str, str]]) -> dict[str, Any]:
     """Return the branch with the earliest recorded PresentSiteYear.
 
@@ -1392,6 +1481,17 @@ def ask(question: str, branch_code: str | None = None) -> dict[str, Any]:
         connected_answer = answer_connected_question(connection, schema, question, selected_branch)
         if connected_answer is not None:
             return connected_answer
+
+        ordinal_rank = _ordinal_branch_rank(question)
+        if ordinal_rank is not None and selected_branch is None:
+            return _answer_ordinal_branch(connection, schema, ordinal_rank)
+        if (
+            selected_branch is None
+            and re.search(r"\bn-?th\b", q)
+            and re.search(r"\b(?:branch|branches|library|libraries)\b", q)
+            and re.search(r"\b(?:open(?:ed|ing)?|present site|current site|year)\b", q)
+        ):
+            return _not_found("Please specify the ordinal position, for example: ‘What was the 5th branch to open?’ Answers use the recorded present-site year, not necessarily the original library-service opening year.")
 
         if oldest_branch_question:
             # A selected branch panel is never allowed to widen to a network

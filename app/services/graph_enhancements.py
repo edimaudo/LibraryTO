@@ -73,6 +73,12 @@ def _norm(value: Any) -> str:
     return re.sub(r"[^a-z0-9]", "", str(value or "").casefold())
 
 
+def _humanize_label(value: str) -> str:
+    text = re.sub(r"([a-z0-9])([A-Z])", r"\1 \2", str(value or ""))
+    text = re.sub(r"[_-]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip().title()
+
+
 def _rows(cursor) -> list[dict[str, Any]]:
     return cursor.fetchall()
 
@@ -223,7 +229,16 @@ def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
         for label in sorted(schema):
             result = _rows(connection.execute(f"MATCH (n:{_quote(label)}) RETURN count(n) AS count"))
             row = result[0] if result else {}
-            node_counts.append({"label": label, "count": int((row or {}).get("count") or 0)})
+            node_counts.append({
+                "label": label,
+                "display_label": _humanize_label(label),
+                "count": int((row or {}).get("count") or 0),
+                "properties": sorted(
+                    (key for key in schema.get(label, {}).values()
+                     if key and not str(key).startswith("_")),
+                    key=str.casefold,
+                ),
+            })
         relationship_counts = []
         for rel_type in relationship_types:
             result = _rows(connection.execute(
@@ -289,6 +304,63 @@ def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
             "relationship_counts": relationship_counts,
             "branches": [{"code": b["code"], "name": b["name"]} for b in branch_records()],
             "selected": selected,
+        }
+    finally:
+        connection.close()
+
+
+def inspect_graph_nodes(label: str, search: str = "", limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    """Browse a bounded, read-only page of nodes for judging and graph inspection."""
+    connection = open_graph(read_only=True)
+    try:
+        schema, relationship_types = _schema(connection)
+        if label not in schema:
+            raise ValueError("Choose a node label returned by the graph schema.")
+
+        properties = [
+            key for key in schema[label].values()
+            if key and not str(key).startswith("_")
+            and _norm(key) not in {"librarytosourcekey", "librarytosourcefile"}
+        ]
+        term = str(search or "").strip()[:120]
+        predicates = [f"toLower(toString(n.{_quote(key)})) CONTAINS $search" for key in properties]
+        where = " WHERE " + " OR ".join(predicates) if term and predicates else ""
+        parameters = {"search": term.casefold()} if term and predicates else {}
+
+        count_rows = _rows(connection.execute(
+            f"MATCH (n:{_quote(label)}){where} RETURN count(n) AS count",
+            parameters,
+        ))
+        total = int((count_rows[0].get("count") or 0) if count_rows else 0)
+        safe_limit = max(1, min(int(limit), 100))
+        safe_offset = max(0, min(int(offset), 50000))
+        rows = _rows(connection.execute(
+            f"MATCH (n:{_quote(label)}){where} "
+            f"RETURN labels(n) AS labels, properties(n) AS properties "
+            f"SKIP {safe_offset} LIMIT {safe_limit}",
+            parameters,
+        ))
+        records = []
+        for row in rows:
+            raw = row.get("properties") or {}
+            props = _safe_properties(raw)
+            labels = [str(value) for value in row.get("labels") or [label]]
+            records.append({
+                "summary": _node_summary(labels, props),
+                "labels": labels,
+                "properties": props,
+            })
+        return {
+            "available": True,
+            "label": label,
+            "display_label": _humanize_label(label),
+            "search": term,
+            "total": total,
+            "offset": safe_offset,
+            "limit": safe_limit,
+            "has_more": safe_offset + len(records) < total,
+            "property_names": properties,
+            "records": records,
         }
     finally:
         connection.close()

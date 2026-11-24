@@ -51,6 +51,9 @@ def main() -> int:
     checks.append(("Question forms and search inputs have labels", all(token in js for token in ('for="overview-question"', 'for="branch-question"', 'for="compare-search"'))))
     checks.append(("Branch Explorer insight tables expose captions and header scopes", '<caption class="visually-hidden">' in enhancement and 'scope="col"' in enhancement and 'scope="row"' in enhancement))
     checks.append(("Loading and error updates have status semantics", 'role="status"' in enhancement and 'role="alert"' in enhancement))
+    checks.append(("Judge-facing Graph Explorer is reachable from primary navigation", 'href="/graph-explorer"' in template and "graph:renderGraphExplorer" in js))
+    checks.append(("Graph node browser has explicit labels and a search action", all(token in js for token in ('for="graph-node-label"', 'for="graph-node-term"', 'id="graph-node-search"'))))
+    checks.append(("Graph property inspection supports expandable node and relationship details", all(token in js for token in ('graphPropertiesMarkup', 'graph-connection-group', 'graph-node-details'))))
 
     light = theme_tokens(css, ":root")
     dark = theme_tokens(css, ":root[data-theme=dark]")

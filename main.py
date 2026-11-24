@@ -21,12 +21,12 @@ from app.services.data_store import branch_records, dataset_status, event_record
 from app.services.relate import RelateUnavailable, ask as relate_ask, graph_status
 from app.routes.graph_features import router as graph_features_router
 
-app = FastAPI(title="LibraryTO", version="1.2.0", description="Explore Toronto Public Library branch information, activity and connected context.", docs_url=None, redoc_url=None, openapi_url=None)
+app = FastAPI(title="LibraryTO", version="1.3.0", description="Explore Toronto Public Library branch information, activity and connected context.", docs_url=None, redoc_url=None, openapi_url=None)
 app.include_router(graph_features_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 # Bump on source changes because static assets are served with immutable caching.
-STATIC_VERSION = "20261123-3"
+STATIC_VERSION = "20261124-1"
 
 
 class AskRequest(BaseModel):
@@ -184,7 +184,7 @@ def _page(request: Request, active: str, title: str):
 
 
 def _is_data_route(path: str) -> bool:
-    return path in {"/overview", "/branches", "/comparisons/data", "/search", "/ask", "/status", "/health", "/events/options"} or path.startswith(("/branches/", "/events/recommendations", "/exports/"))
+    return path in {"/overview", "/branches", "/comparisons/data", "/search", "/ask", "/status", "/health", "/events/options"} or path.startswith(("/branches/", "/events/recommendations", "/exports/", "/relate/"))
 
 
 @app.middleware("http")
@@ -228,6 +228,10 @@ async def comparisons_page(request: Request): return _page(request, "comparisons
 
 @app.get("/programs-events", response_class=HTMLResponse)
 async def events_page(request: Request): return _page(request, "events", "Programs & Events")
+
+
+@app.get("/graph-explorer", response_class=HTMLResponse)
+async def graph_explorer_page(request: Request): return _page(request, "graph", "Graph Explorer")
 
 
 @app.get("/overview")

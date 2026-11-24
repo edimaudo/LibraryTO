@@ -12,7 +12,11 @@ LibraryTO uses the seven CSV snapshots already in `data/`. It does not query ext
 - **Nodes:** Branches, annual circulation, visits, workstation sessions and card registrations, events, neighbourhood geography, wards, services and facilities.
 - **Relationships:** `HAS_CIRCULATION_RECORD`, `HAS_VISITS_RECORD`, `HAS_WORKSTATION_RECORD`, `HAS_REGISTRATION_RECORD`, `HOSTS_EVENT`, `IN_NEIGHBOURHOOD`, `IN_WARD`, `OFFERS_SERVICE`, `HAS_FACILITY` and `HAS_GEOGRAPHY_RECORD`.
 
-The application uses these edges for connected-context Q&A and the Branch Explorer in Branch Insights and Branch Comparisons. Branch Insights places Branch Explorer after Activity & Forecast and uses the branch selected in Find a branch. It identifies other branches connected through the same ward or neighbourhood, compares their reported services, and highlights services reported by local peers but not listed for the selected branch. Branch Comparisons provides a dedicated Branch Explorer subtab with pairwise shared neighbourhoods, wards and services, plus a service-coverage matrix for the selected branches. Annual observation records and program/event records are excluded from these explorer views. Branch properties and reported services remain in Branch Information. Overview and Programs & Events do not contain a graph explorer. All graph relationships and peer insights are derived from the existing CSV snapshots and their Relate graph connections.
+The application uses these edges for connected-context Q&A and the Branch Explorer in Branch Insights and Branch Comparisons. Branch Insights uses the branch selected in Find a branch to identify peers in the same ward or neighbourhood, rank the closest local connections by shared graph relationships, and compare the reach of reported services across the peer group. Branch Comparisons shows pairwise shared neighbourhoods, wards and services, plus a service-coverage matrix. These are descriptive relationship measures, not service-quality or community-need scores. All insights are derived from the existing CSV snapshots and their Relate graph connections.
+
+The separate **Graph Explorer** page is the judge-facing graph inspection interface. It is read-only and uses the same committed single-file Relate store that powers Q&A. Judges can inspect node labels and counts, relationship types and edge counts, browse nodes by label, search stored property values, expand nodes to inspect their properties, and select a branch to inspect its direct relationships and connected node properties. `/relate/explorer` exposes graph-level structure and branch connections; `/relate/inspect` provides bounded, searchable node browsing, returning up to 100 nodes per request with support for additional result pages. This makes the persisted graph inspectable through the application rather than relying on an external database client.
+
+Overview Q&A supports ordinal branch-history questions such as `What was the 5th branch to open?`. These are ranked using `PresentSiteYear`, which records the year of the current site, not necessarily when the library service first opened. Branches with the same recorded year are ordered alphabetically by branch name; the answer discloses this tie-handling rule.
 
 ## Application sections
 
@@ -44,7 +48,7 @@ Start the application:
 uvicorn main:app --reload
 ```
 
-Open `http://127.0.0.1:8000`. Try asking: `Which branches in Ward 1 offer a Digital Innovation Hub?` In Branch Insights, select a branch and open **Branch Explorer** after Activity & Forecast to inspect local peer branches and reported service coverage. In Branch Comparisons, select two or more branches and open the **Branch Explorer** subtab to compare shared areas, pairwise service overlap and service distribution.
+Open `http://127.0.0.1:8000`. Try asking `Which branches in Ward 1 offer a Digital Innovation Hub?` or `What was the 5th branch to open?` (the latter is ranked by current-site year, not original service founding date). In Branch Insights, select a branch and open **Branch Explorer** to inspect local peers and reported service reach. Open **Graph Explorer** to browse node labels, node properties, relationship counts and the connected records stored in Relate.
 
 ## Validation
 

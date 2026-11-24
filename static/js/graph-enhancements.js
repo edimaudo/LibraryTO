@@ -71,12 +71,21 @@
       const peerServices=new Set((peer.services||[]).map(name=>String(name).toLowerCase()));
       const shared=ownServices.filter(name=>peerServices.has(name.toLowerCase()));
       const contexts=(peer.contexts||[]).map(peerContextLabel);
-      return {...peer,sharedServices:shared,contextLabel:contexts.join('; ')||'Shared graph context'};
-    }).sort((a,b)=>b.sharedServices.length-a.sharedServices.length||a.branch_name.localeCompare(b.branch_name));
+      const contextTypes=new Set((peer.contexts||[]).map(item=>item.context_type));
+      const distinguishingServices=(peer.services||[]).filter(name=>!ownServiceSet.has(String(name).toLowerCase()));
+      return {
+        ...peer,
+        sharedServices:shared,
+        distinguishingServices,
+        contextLabel:contexts.join('; ')||'Shared graph context',
+        contextTypes:[...contextTypes],
+        sharedConnectionCount:contexts.length+shared.length
+      };
+    }).sort((a,b)=>b.sharedConnectionCount-a.sharedConnectionCount||b.sharedServices.length-a.sharedServices.length||a.branch_name.localeCompare(b.branch_name));
 
-    const peerMarkup=peerRows.length
-      ? `<div class="table-scroll"><table class="data-table" aria-label="Other branches sharing this branch's ward or neighbourhood"><caption class="visually-hidden">Other branches sharing this branch's ward or neighbourhood</caption><thead><tr><th scope="col">Branch</th><th scope="col">Shared Context</th><th scope="col">Reported Services In Common</th></tr></thead><tbody>${peerRows.map(peer=>`<tr><th scope="row">${escapeHtml(peer.branch_name)}</th><td>${escapeHtml(peer.contextLabel)}</td><td>${peer.sharedServices.length?escapeHtml(peer.sharedServices.join(', ')):'No shared services reported'}</td></tr>`).join('')}</tbody></table></div>`
-      : '<p class="small-note">No other branches are connected through this branch’s neighbourhood or ward in the current graph.</p>';
+    const neighbourhoodPeers=peerRows.filter(peer=>peer.contextTypes.includes('neighbourhood'));
+    const wardPeers=peerRows.filter(peer=>peer.contextTypes.includes('ward'));
+    const bothAreaPeers=peerRows.filter(peer=>peer.contextTypes.includes('neighbourhood')&&peer.contextTypes.includes('ward'));
 
     const coverage=new Map();
     ownServices.forEach(name=>coverage.set(name.toLowerCase(),{name,selected:true,peers:[]}));
@@ -86,19 +95,44 @@
       coverage.get(key).peers.push(peer.branch_name);
     }));
     const coverageRows=[...coverage.values()].sort((a,b)=>b.peers.length-a.peers.length||a.name.localeCompare(b.name));
-    const coverageMarkup=coverageRows.length&&peerRows.length
-      ? `<div class="table-scroll"><table class="data-table" aria-label="Reported service coverage across branches in the same area"><caption class="visually-hidden">Reported service coverage across branches in the same area</caption><thead><tr><th scope="col">Service</th><th scope="col">Selected Branch</th><th scope="col">Other Local Branches</th></tr></thead><tbody>${coverageRows.map(item=>`<tr><th scope="row">${escapeHtml(item.name)}</th><td>${item.selected?'Reported':'Not Reported'}</td><td>${item.peers.length?`${number(item.peers.length)}: ${escapeHtml(item.peers.join(', '))}`:'None in selected peer group'}</td></tr>`).join('')}</tbody></table></div>`
-      : '<p class="small-note">Service coverage comparisons appear when other branches share the selected branch’s ward or neighbourhood.</p>';
-
     const sharedServiceCount=coverageRows.filter(item=>item.selected&&item.peers.length>0).length;
-    const onlyElsewhere=coverageRows.filter(item=>!item.selected&&item.peers.length>0);
-    const insights=[];
-    if(peerRows.length)insights.push(`${peerRows.length} other ${peerRows.length===1?'branch shares':'branches share'} a ward or neighbourhood with ${branch.branch_name}.`);
-    if(sharedServiceCount)insights.push(`${sharedServiceCount} reported ${sharedServiceCount===1?'service is':'services are'} also offered by at least one local peer.`);
-    if(onlyElsewhere.length)insights.push(`${onlyElsewhere.length} ${onlyElsewhere.length===1?'service is':'services are'} reported by local peers but not listed for this branch.`);
-    const insightMarkup=insights.length?`<ul class="branch-explorer-takeaways">${insights.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul>`:'<p class="small-note">The available graph does not contain enough connected peer data to calculate local service comparisons.</p>';
+    const peerOnlyServices=coverageRows.filter(item=>!item.selected&&item.peers.length>0);
+    const selectedOnlyServices=coverageRows.filter(item=>item.selected&&!item.peers.length);
 
-    return `${insightMarkup}<section class="branch-explorer-block"><h3>Branches In The Same Area</h3>${peerMarkup}</section><section class="branch-explorer-block"><h3>Local Service Coverage</h3>${coverageMarkup}</section>`;
+    const metricsMarkup=`<div class="branch-explorer-metrics" aria-label="Local branch network summary">
+      <div><strong>${number(peerRows.length)}</strong><span>Local peer branches</span></div>
+      <div><strong>${number(neighbourhoodPeers.length)}</strong><span>Same neighbourhood</span></div>
+      <div><strong>${number(wardPeers.length)}</strong><span>Same ward</span></div>
+      <div><strong>${number(sharedServiceCount)}</strong><span>Services also reported locally</span></div>
+    </div>`;
+
+    const similarityMarkup=peerRows.length
+      ? `<div class="table-scroll"><table class="data-table" aria-label="Local branches ranked by shared graph connections"><caption class="visually-hidden">Local branches ranked by shared graph connections</caption><thead><tr><th scope="col">Branch</th><th scope="col">Shared Area</th><th scope="col">Services In Common</th><th scope="col">Other Reported Services</th></tr></thead><tbody>${peerRows.slice(0,10).map(peer=>`<tr><th scope="row">${escapeHtml(peer.branch_name)}</th><td>${escapeHtml(peer.contextLabel)}</td><td>${peer.sharedServices.length?escapeHtml(peer.sharedServices.join(', ')):'None reported'}</td><td>${peer.distinguishingServices.length?escapeHtml(peer.distinguishingServices.join(', ')):'—'}</td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="small-note">No other physical branches are connected to this branch through its ward or neighbourhood in the current graph.</p>';
+
+    const serviceReachMarkup=coverageRows.length&&peerRows.length
+      ? `<div class="branch-service-reach">${coverageRows.map(item=>{
+          const count=item.peers.length;
+          const percentage=Math.round(count/peerRows.length*100);
+          return `<div class="branch-service-reach-row"><div class="branch-service-reach-label"><strong>${escapeHtml(item.name)}</strong><span>${number(count)} of ${number(peerRows.length)} peers · ${percentage}%</span></div><div class="branch-service-reach-track" role="meter" aria-label="${escapeHtml(item.name)} reported by ${count} of ${peerRows.length} local peers" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percentage}"><span style="width:${percentage}%"></span></div><small>${item.selected?'Also reported by this branch':'Not listed for this branch'}</small></div>`;
+        }).join('')}</div>`
+      : '<p class="small-note">Local service reach will appear when the graph has connected peer branches.</p>';
+
+    const distinctionMarkup=(peerOnlyServices.length||selectedOnlyServices.length)
+      ? `<div class="branch-service-differences"><section><h4>Reported By Local Peers</h4><p>${peerOnlyServices.length?escapeHtml(peerOnlyServices.map(item=>`${item.name} (${item.peers.length})`).join(' · ')):'No additional peer services are recorded.'}</p></section><section><h4>Listed Only For This Branch In Its Peer Group</h4><p>${selectedOnlyServices.length?escapeHtml(selectedOnlyServices.map(item=>item.name).join(' · ')):'No branch-specific service distinctions were found.'}</p></section></div>`
+      : '<p class="small-note">No service differences were found across the selected local peer group.</p>';
+
+    const takeaways=[];
+    if(peerRows.length)takeaways.push(`${peerRows.length} other branches share at least one ward or neighbourhood relationship with ${branch.branch_name}.`);
+    if(bothAreaPeers.length)takeaways.push(`${bothAreaPeers.length} local ${bothAreaPeers.length===1?'branch is':'branches are'} connected through both the same ward and neighbourhood.`);
+    if(sharedServiceCount)takeaways.push(`${sharedServiceCount} of ${ownServices.length} reported services are also listed by at least one local peer.`);
+    if(peerOnlyServices.length)takeaways.push(`${peerOnlyServices.length} additional services are recorded among local peers but are not listed for this branch.`);
+    const insightMarkup=takeaways.length?`<ul class="branch-explorer-takeaways">${takeaways.map(item=>`<li>${escapeHtml(item)}</li>`).join('')}</ul>`:'<p class="small-note">The graph currently has no connected peer records to summarize for this branch. Use Graph Explorer to inspect the node and relationship records.</p>';
+
+    return `${metricsMarkup}${insightMarkup}
+      <section class="branch-explorer-block"><h3>Closest Local Connections</h3><p class="small-note">Ranked by the number of shared graph connections: neighbourhood, ward and reported services. This is a connection count, not a service-quality score.</p>${similarityMarkup}</section>
+      <section class="branch-explorer-block"><h3>Local Service Reach</h3><p class="small-note">Share of connected peer branches with each service recorded in the supplied directory.</p>${serviceReachMarkup}</section>
+      <section class="branch-explorer-block"><h3>Service Differences</h3>${distinctionMarkup}</section>`;
   }
   function pairwiseInsights(branches) {
     const pairs=[];

@@ -76,10 +76,13 @@ def test_branch_explorer_shows_local_peer_and_service_coverage_insights_without_
     app = (ROOT / "static/js/graph-enhancements.js").read_text(encoding="utf-8")
     backend = (ROOT / "app/services/graph_enhancements.py").read_text(encoding="utf-8")
     assert "function branchExplorerInsights(branch)" in app
-    assert "Branches In The Same Area" in app
-    assert "Local Service Coverage" in app
+    assert "Closest Local Connections" in app
+    assert "Local Service Reach" in app
+    assert "Service Differences" in app
     assert "How Selected Branches Connect" in app
     assert "Reported Service Distribution" in app
+    assert "branch-explorer-metrics" in app
+    assert "sharedConnectionCount" in app
     assert "graph.node_count" not in app
     assert "graph.relationship_count" not in app
     assert '"peer_branches": peer_branches' in backend
@@ -95,3 +98,27 @@ def test_overview_and_programs_events_do_not_mount_branch_explorer():
 def test_accessibility_validator_and_docs_are_present():
     assert (ROOT / "scripts/validate_accessibility.py").is_file()
     assert (ROOT / "ACCESSIBILITY_VALIDATION.md").is_file()
+
+
+def test_judge_facing_graph_explorer_browses_schema_nodes_and_branch_edges():
+    template = (ROOT / "templates/index.html").read_text(encoding="utf-8")
+    app = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    api = (ROOT / "app/routes/graph_features.py").read_text(encoding="utf-8")
+    backend = (ROOT / "app/services/graph_enhancements.py").read_text(encoding="utf-8")
+    main = (ROOT / "main.py").read_text(encoding="utf-8")
+    assert 'href="/graph-explorer"' in template
+    assert "graph:renderGraphExplorer" in app
+    assert "Node Labels" in app and "Relationship Types" in app
+    assert "Browse Nodes And Properties" in app
+    assert "Inspect A Branch’s Graph Connections" in app
+    assert '@router.get("/relate/inspect")' in api
+    assert "def inspect_graph_nodes(" in backend
+    assert '@app.get("/graph-explorer"' in main
+
+
+def test_overview_ordinal_branch_question_uses_present_site_year_with_tie_note():
+    source = (ROOT / "app/services/relate.py").read_text(encoding="utf-8")
+    assert "def _ordinal_branch_rank(" in source
+    assert "def _answer_ordinal_branch(" in source
+    assert "Branches with the same present-site year are ordered alphabetically" in source
+    assert "The source records the year of the current site" in source
