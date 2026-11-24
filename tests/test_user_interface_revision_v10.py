@@ -100,20 +100,38 @@ def test_accessibility_validator_and_docs_are_present():
     assert (ROOT / "ACCESSIBILITY_VALIDATION.md").is_file()
 
 
-def test_judge_facing_graph_explorer_browses_schema_nodes_and_branch_edges():
+def test_graph_explorer_is_an_overview_subtab_and_not_primary_navigation():
     template = (ROOT / "templates/index.html").read_text(encoding="utf-8")
     app = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
     api = (ROOT / "app/routes/graph_features.py").read_text(encoding="utf-8")
     backend = (ROOT / "app/services/graph_enhancements.py").read_text(encoding="utf-8")
     main = (ROOT / "main.py").read_text(encoding="utf-8")
-    assert 'href="/graph-explorer"' in template
-    assert "graph:renderGraphExplorer" in app
+    overview = app.split("async function renderOverview() {", 1)[1].split("function branchPicker(", 1)[0]
+    assert "Graph Explorer" in overview
+    assert 'id="overview-panel-4"' in overview
+    assert 'id="overview-graph-explorer"' in overview
+    assert 'href="/graph-explorer"' not in template
+    assert "Inspect A Branch’s Graph Connections" not in app
     assert "Node Labels" in app and "Relationship Types" in app
     assert "Browse Nodes And Properties" in app
-    assert "Inspect A Branch’s Graph Connections" in app
+    assert "Branch Connections" in app
     assert '@router.get("/relate/inspect")' in api
     assert "def inspect_graph_nodes(" in backend
-    assert '@app.get("/graph-explorer"' in main
+    assert "_physical_branch_clause" in backend
+    assert "graph:renderGraphExplorer" not in app
+    assert '@app.get("/graph-explorer"' not in main
+
+
+def test_graph_explorer_adds_nonduplicative_graph_topology_insights():
+    app = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    backend = (ROOT / "app/services/graph_enhancements.py").read_text(encoding="utf-8")
+    assert "Relationship Coverage" in app
+    assert "Most Connected Physical Branches" in app
+    assert "Neighbourhood Hubs" in app
+    assert "Ward Hubs" in app
+    assert '"area_hubs": area_hubs' in backend
+    assert '"relationship_coverage": coverage' in backend
+    assert '"physical_branch_filter": "PhysicalBranch = 1"' in backend
 
 
 def test_overview_ordinal_branch_question_uses_present_site_year_with_tie_note():

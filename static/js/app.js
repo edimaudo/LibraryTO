@@ -334,12 +334,13 @@ async function renderOverview() {
     `<section id="overview-panel-2" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-2" hidden>
       <section class="analysis-section branch-analysis-section">${rankingTabs(data)}</section>
     </section>`,
-    `<section id="overview-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-3" hidden><section class="location-section">${locations}</section></section>`
+    `<section id="overview-panel-3" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-3" hidden><section class="location-section">${locations}</section></section>`,
+    `<section id="overview-panel-4" class="tab-panel" role="tabpanel" aria-labelledby="overview-tab-4" hidden><div id="overview-graph-explorer"></div></section>`
   ].join('');
   host.innerHTML=`
     <section class="overview-question analysis-section"><h2>Ask a question</h2><form id="overview-question-form" class="question-form"><label class="visually-hidden" for="overview-question">Your question</label><div class="question-controls"><input id="overview-question" class="control" type="text" maxlength="500" required placeholder="Ask about any branch, its details, services, facilities or activity"><button class="button" type="submit">Ask</button></div></form><div id="overview-answer" aria-live="polite"></div></section>
     <section class="stats-grid" aria-label="Annual network summary">${stats}</section>
-    ${tabsMarkup(['Annual activity','Service tiers','Branch Overview','Location'],'overview')}${panels}`;
+    ${tabsMarkup(['Annual activity','Service tiers','Branch Overview','Location','Graph Explorer'],'overview')}${panels}`;
   host.addEventListener('change',event=>{
     const select=event.target.closest('.branch-overview-year');
     if(!select)return;
@@ -351,8 +352,13 @@ async function renderOverview() {
     drawCharts(results);
   });
   bindQuestionForm('#overview-question-form','#overview-question','#overview-answer',null);
+  let graphExplorerLoaded=false;
   attachTabs(host,(panel,index)=>{
     if(index===3 && panel.id==='overview-panel-3'){const mapEl=$('#branch-map');if(mapEl&&!mapEl.dataset.ready)createMap('branch-map',data.branches,data.annual_values,years);else requestAnimationFrame(()=>maps.get('branch-map')?.invalidateSize());}
+    if(index===4 && panel.id==='overview-panel-4'&&!graphExplorerLoaded){
+      graphExplorerLoaded=true;
+      return renderGraphExplorer($('#overview-graph-explorer'));
+    }
   });
   await drawCharts($('#overview-panel-0'));
   if(!$('#overview-panel-3').hidden)createMap('branch-map',data.branches,data.annual_values,years);
@@ -516,83 +522,125 @@ function graphRecordMarkup(record,index) {
   const subtitle=(record.labels||[]).map(humanizeGraphKey).join(' · ');
   return `<details class="graph-node-details"><summary><strong>${esc(title)}</strong><small>${esc(subtitle)}</small></summary><div class="graph-node-inspection">${graphPropertiesMarkup(record.properties)}</div></details>`;
 }
-async function renderGraphExplorer() {
-  host.innerHTML=loadingMarkup('Reading graph schema and relationships…','graph-inspector-loading');
+async function renderGraphExplorer(target=host) {
+  const graphHost=target||host;
+  const $g=(selector)=>$(selector,graphHost);
+  graphHost.innerHTML=loadingMarkup('Reading graph structure and physical branch relationships…','graph-inspector-loading');
   let graph;
   try { graph=await request('/relate/explorer'); }
-  catch(error){host.innerHTML=note(error.message||'The Relate graph is unavailable.','error');return;}
-  if(!graph.available){host.innerHTML=empty('The Relate graph is not available.');return;}
+  catch(error){graphHost.innerHTML=note(error.message||'The Relate graph is unavailable.','error');return;}
+  if(!graph.available){graphHost.innerHTML=empty('The Relate graph is not available.');return;}
 
+  const insights=graph.insights||{};
   const nodeTypes=(graph.node_counts||[]).slice().sort((a,b)=>String(a.display_label||a.label).localeCompare(String(b.display_label||b.label)));
   const relationshipTypes=(graph.relationship_counts||[]).slice().sort((a,b)=>String(a.label||a.type).localeCompare(String(b.label||b.type)));
   const branchOptions=(graph.branches||[]).map((branch,index)=>`<option value="${esc(branch.code)}" ${index===0?'selected':''}>${esc(branch.name)} · ${esc(branch.code)}</option>`).join('');
-  const defaultLabel=(nodeTypes.find(item=>item.label==='BranchGeneralInformation')||nodeTypes[0]||{}).label||'';
+  const branchLabel='BranchGeneralInformation';
+  const defaultLabel=(nodeTypes.find(item=>item.label===branchLabel)||nodeTypes[0]||{}).label||'';
   const labelOptions=nodeTypes.map(item=>`<option value="${esc(item.label)}" ${item.label===defaultLabel?'selected':''}>${esc(item.display_label||item.label)} (${fmt(item.count)})</option>`).join('');
   const totalNodes=(graph.node_counts||[]).reduce((sum,item)=>sum+Number(item.count||0),0);
   const totalEdges=(graph.relationship_counts||[]).reduce((sum,item)=>sum+Number(item.count||0),0);
+  const physicalDirectory=Number(insights.physical_branches_in_directory||0);
+  const physicalGraph=Number(insights.physical_branch_nodes||0);
+  const coveragePct=physicalDirectory?Math.min(100,physicalGraph/physicalDirectory*100):0;
+  const stat=(value,label,detail='')=>`<article class="graph-kpi"><strong>${esc(value)}</strong><span>${esc(label)}</span>${detail?`<small>${esc(detail)}</small>`:''}</article>`;
+  const coverageRows=(insights.relationship_coverage||[]).map(item=>{
+    const pct=Math.max(0,Math.min(100,Number(item.percent||0)));
+    return `<div class="graph-coverage-row"><div class="graph-coverage-label"><strong>${esc(item.label)}</strong><span>${fmt(item.branches)} / ${fmt(physicalGraph)} branches · ${pct.toFixed(1)}%</span></div><div class="graph-coverage-track" aria-hidden="true"><span style="width:${pct}%"></span></div></div>`;
+  }).join('')||empty('No branch relationship coverage is available.');
+  const topBranches=(insights.top_connected_branches||[]).map(item=>[item.name, item.code, fmt(item.connections)]);
+  const areaTable=(items,heading)=>items?.length
+    ? `<div class="graph-area-list">${items.map(item=>`<div class="graph-area-row"><strong>${esc(item.name)}</strong><span>${fmt(item.branches)} physical branches</span></div>`).join('')}</div>`
+    : empty(`No connected ${heading.toLowerCase()} were found.`);
+  const structureNodeRows=nodeTypes.map(item=>`<tr><th scope="row">${esc(item.display_label||item.label)}</th><td>${fmt(item.count)}</td><td><details class="graph-schema-properties"><summary>${fmt((item.properties||[]).length)} fields</summary><p>${(item.properties||[]).map(humanizeGraphKey).map(esc).join(', ')||'No properties reported'}</p></details></td></tr>`).join('');
+  const structureRelationshipRows=relationshipTypes.map(item=>`<tr><th scope="row">${esc(item.label||item.type)}</th><td>${fmt(item.count)}</td></tr>`).join('');
 
-  host.innerHTML=`<section class="graph-inspector-intro"><p>This is a read-only view of the Relate graph used by LibraryTO. Browse node labels, inspect stored properties, review relationship types and follow a branch’s direct graph connections. The view reads the committed graph store; it does not modify it.</p><div class="graph-inspector-metrics"><div><strong>${fmt(totalNodes)}</strong><span>Nodes</span></div><div><strong>${fmt(totalEdges)}</strong><span>Relationships</span></div><div><strong>${fmt(nodeTypes.length)}</strong><span>Node Types</span></div><div><strong>${fmt(relationshipTypes.length)}</strong><span>Relationship Types</span></div></div></section>
-    <section class="graph-inspector-section"><h2>Graph Structure</h2><div class="graph-summary-tables"><section><h3>Node Labels</h3><div class="table-scroll"><table class="data-table"><thead><tr><th scope="col">Node Type</th><th scope="col">Nodes</th><th scope="col">Properties</th></tr></thead><tbody>${nodeTypes.map(item=>`<tr><th scope="row">${esc(item.display_label||item.label)}</th><td>${fmt(item.count)}</td><td><details class="graph-schema-properties"><summary>${fmt((item.properties||[]).length)} fields</summary><p>${(item.properties||[]).map(humanizeGraphKey).map(esc).join(', ')||'No properties reported'}</p></details></td></tr>`).join('')}</tbody></table></div></section><section><h3>Relationship Types</h3><div class="table-scroll"><table class="data-table"><thead><tr><th scope="col">Relationship</th><th scope="col">Connections</th></tr></thead><tbody>${relationshipTypes.map(item=>`<tr><th scope="row">${esc(item.label||item.type)}</th><td>${fmt(item.count)}</td></tr>`).join('')}</tbody></table></div></section></div></section>
-    <section class="graph-inspector-section"><h2>Browse Nodes And Properties</h2><p class="small-note">Choose a node type and optionally search its stored properties. Expand any result to inspect the complete property values returned by Relate.</p><form id="graph-node-search" class="graph-node-toolbar"><div class="form-field"><label for="graph-node-label">Node Type</label><select id="graph-node-label" class="control">${labelOptions}</select></div><div class="form-field graph-node-search-field"><label for="graph-node-term">Search Node Properties</label><input id="graph-node-term" class="control" type="search" maxlength="120" placeholder="Search names, years, codes or values"></div><button class="button" type="submit">Search</button></form><p id="graph-node-count" class="small-note" aria-live="polite"></p><div id="graph-node-results" class="graph-node-list" aria-live="polite"></div><div class="graph-node-actions"><button id="graph-node-more" class="button secondary" type="button" hidden>Show More Nodes</button></div></section>
-    <section class="graph-inspector-section"><h2>Inspect A Branch’s Graph Connections</h2><p class="small-note">Select a branch to inspect its graph node and the records connected through actual Relate relationships, including annual observations, services, facilities, location context and events.</p><div class="form-field graph-branch-select"><label for="graph-branch-code">Branch</label><select id="graph-branch-code" class="control">${branchOptions}</select></div><div id="graph-branch-record" class="graph-branch-record" aria-live="polite"><p class="small-note">Select a branch to load its connections.</p></div></section>`;
+  graphHost.innerHTML=`<div class="graph-explorer-shell">
+    <header class="graph-explorer-heading"><div><h2>Graph Explorer</h2><p>Inspect the Relate graph behind LibraryTO. Graph-wide branch counts and insights below include only directory records where <strong>PhysicalBranch = 1</strong>.</p></div><span class="graph-readonly">Read-only</span></header>
+    <div class="graph-explorer-kpis" aria-label="Graph summary">
+      ${stat(`${fmt(physicalGraph)} / ${fmt(physicalDirectory)}`,'Physical Branch Nodes','Graph nodes compared with the physical branch directory')}
+      ${stat(fmt(insights.connected_physical_branches),'Connected Physical Branches',`${coveragePct.toFixed(1)}% of physical directory branches represented`)}
+      ${stat(fmt(insights.physical_branch_relationships),'Physical Branch Relationships','Direct graph links from physical branch nodes')}
+      ${stat(fmt(insights.unconnected_physical_branches),'Unconnected Branch Nodes','Physical branch nodes with no outgoing graph links')}
+    </div>
+    ${physicalGraph!==physicalDirectory?`<p class="graph-data-warning" role="status">The graph currently contains ${fmt(physicalGraph)} physical branch nodes, while the source directory has ${fmt(physicalDirectory)} physical branches. Rebuild the graph if these counts should match.</p>`:''}
+    ${tabsMarkup(['Graph Insights','Graph Structure','Browse Nodes','Branch Connections'],'graph-explorer-sections')}
+    <section id="graph-explorer-sections-panel-0" class="tab-panel graph-inspector-panel" role="tabpanel" aria-labelledby="graph-explorer-sections-tab-0">
+      <div class="graph-insight-grid">
+        <section class="graph-insight-section graph-coverage-section"><div class="graph-section-heading"><h3>Relationship Coverage</h3><p>Share of physical branches with each type of recorded graph connection.</p></div>${coverageRows}</section>
+        <section class="graph-insight-section"><div class="graph-section-heading"><h3>Most Connected Physical Branches</h3><p>Ranked by direct relationship count. This reflects graph connectivity, not branch performance.</p></div>${table(['Branch','Code','Connections'],topBranches)}</section>
+        <section class="graph-insight-section"><div class="graph-section-heading"><h3>Neighbourhood Hubs</h3><p>Neighbourhood nodes connected to the largest number of physical branches.</p></div>${areaTable(insights.area_hubs?.neighbourhoods,'Neighbourhoods')}</section>
+        <section class="graph-insight-section"><div class="graph-section-heading"><h3>Ward Hubs</h3><p>Ward nodes connected to the largest number of physical branches.</p></div>${areaTable(insights.area_hubs?.wards,'Wards')}</section>
+      </div>
+      <p class="graph-inspector-footnote">These insights describe the structure and coverage of the stored graph. They do not measure service quality, demand or community outcomes.</p>
+    </section>
+    <section id="graph-explorer-sections-panel-1" class="tab-panel graph-inspector-panel" role="tabpanel" aria-labelledby="graph-explorer-sections-tab-1" hidden>
+      <div class="graph-structure-header"><div><h3>Node Labels</h3><p>Stored node types and their record counts. The branch directory count is restricted to PhysicalBranch = 1.</p></div><span>${fmt(totalNodes)} nodes</span></div>
+      <div class="graph-structure-grid"><section class="graph-insight-section"><h4>Node Types</h4><div class="table-scroll"><table class="data-table"><thead><tr><th scope="col">Node Type</th><th scope="col">Records</th><th scope="col">Properties</th></tr></thead><tbody>${structureNodeRows}</tbody></table></div></section>
+      <section class="graph-insight-section"><h4>Relationship Types</h4><div class="table-scroll"><table class="data-table"><thead><tr><th scope="col">Relationship</th><th scope="col">Connections</th></tr></thead><tbody>${structureRelationshipRows}</tbody></table></div></section></div>
+    </section>
+    <section id="graph-explorer-sections-panel-2" class="tab-panel graph-inspector-panel" role="tabpanel" aria-labelledby="graph-explorer-sections-tab-2" hidden>
+      <div class="graph-section-heading"><h3>Browse Nodes And Properties</h3><p>Search stored nodes and expand a result to inspect its properties. Branch General Information is filtered to PhysicalBranch = 1.</p></div>
+      <form id="graph-node-search" class="graph-node-toolbar"><div class="form-field"><label for="graph-node-label">Node Type</label><select id="graph-node-label" class="control">${labelOptions}</select></div><div class="form-field graph-node-search-field"><label for="graph-node-term">Search Node Properties</label><input id="graph-node-term" class="control" type="search" maxlength="120" placeholder="Search names, years, codes or values"></div><button class="button" type="submit">Search</button></form>
+      <p id="graph-node-filter-note" class="graph-filter-note" aria-live="polite">${defaultLabel===branchLabel?'Branch records are limited to PhysicalBranch = 1.':'Select a node type to inspect its stored records.'}</p>
+      <p id="graph-node-count" class="small-note" aria-live="polite"></p><div id="graph-node-results" class="graph-node-list" aria-live="polite"></div><div class="graph-node-actions"><button id="graph-node-more" class="button secondary" type="button" hidden>Show More Nodes</button></div>
+    </section>
+    <section id="graph-explorer-sections-panel-3" class="tab-panel graph-inspector-panel" role="tabpanel" aria-labelledby="graph-explorer-sections-tab-3" hidden>
+      <div class="graph-section-heading"><h3>Branch Connections</h3><p>Inspect the physical branch node and its direct relationships in Relate. This is a graph inspection tool, not a duplicate branch profile.</p></div>
+      <div class="form-field graph-branch-select"><label for="graph-branch-code">Physical Branch</label><select id="graph-branch-code" class="control">${branchOptions}</select></div>
+      <div id="graph-branch-record" class="graph-branch-record" aria-live="polite"><p class="small-note">Choose a physical branch to inspect its graph connections.</p></div>
+    </section>
+  </div>`;
 
-  const labelSelect=$('#graph-node-label'),searchInput=$('#graph-node-term'),nodeResults=$('#graph-node-results'),nodeCount=$('#graph-node-count'),moreButton=$('#graph-node-more');
-  let currentOffset=0,currentTotal=0,currentLabel=defaultLabel,currentTerm='';
+  const labelSelect=$g('#graph-node-label'),searchInput=$g('#graph-node-term'),nodeResults=$g('#graph-node-results'),nodeCount=$g('#graph-node-count'),moreButton=$g('#graph-node-more');
+  let currentOffset=0,currentLabel=defaultLabel,currentTerm='';
   async function loadNodePage(reset=true){
-    if(reset){
-      currentOffset=0;
-      nodeResults.innerHTML=loadingMarkup('Loading graph nodes…');
-    }else{
-      moreButton.disabled=true;
-      moreButton.textContent='Loading More Nodes…';
-    }
+    if(!labelSelect)return;
+    if(reset){currentOffset=0;nodeResults.innerHTML=loadingMarkup('Loading graph nodes…');}
+    else{moreButton.disabled=true;moreButton.textContent='Loading More Nodes…';}
     currentLabel=labelSelect.value;currentTerm=searchInput.value.trim();
     const params=new URLSearchParams({label:currentLabel,search:currentTerm,limit:'50',offset:String(currentOffset)});
     try{
       const result=await request(`/relate/inspect?${params}`);
-      currentTotal=Number(result.total||0);
       const records=result.records||[];
-      nodeCount.textContent=`${fmt(currentTotal)} matching nodes · Showing ${fmt(Math.min(currentOffset+records.length,currentTotal))} of ${fmt(currentTotal)}`;
+      nodeCount.textContent=`${fmt(result.total)} matching nodes · Showing ${fmt(Math.min(currentOffset+records.length,Number(result.total||0)))} of ${fmt(result.total)}`;
       if(reset)nodeResults.innerHTML='';
       nodeResults.insertAdjacentHTML('beforeend',records.map((record,index)=>graphRecordMarkup(record,currentOffset+index)).join(''));
       if(!records.length&&reset)nodeResults.innerHTML=empty('No nodes match this search.');
-      currentOffset+=records.length;
-      moreButton.hidden=!result.has_more;
-    }catch(error){
-      nodeCount.textContent='';
-      if(reset)nodeResults.innerHTML=note(error.message||'Graph nodes could not be loaded.','error');
-      else nodeResults.insertAdjacentHTML('beforeend',note(error.message||'More graph nodes could not be loaded.','error'));
-    }finally{
-      moreButton.disabled=false;
-      moreButton.textContent='Show More Nodes';
-    }
+      currentOffset+=records.length;moreButton.hidden=!result.has_more;
+      $g('#graph-node-filter-note').textContent=result.physical_branch_filter
+        ? 'Branch records are limited to PhysicalBranch = 1.'
+        : 'Showing records for the selected graph node type.';
+    }catch(error){nodeCount.textContent='';if(reset)nodeResults.innerHTML=note(error.message||'Graph nodes could not be loaded.','error');else nodeResults.insertAdjacentHTML('beforeend',note(error.message||'More graph nodes could not be loaded.','error'));}
+    finally{moreButton.disabled=false;moreButton.textContent='Show More Nodes';}
   }
-  $('#graph-node-search').addEventListener('submit',event=>{event.preventDefault();loadNodePage(true);});
-  labelSelect.addEventListener('change',()=>loadNodePage(true));
-  moreButton.addEventListener('click',()=>loadNodePage(false));
-  await loadNodePage(true);
-
-  const branchSelect=$('#graph-branch-code'),branchHost=$('#graph-branch-record');
+  const branchSelect=$g('#graph-branch-code'),branchHost=$g('#graph-branch-record');
   async function loadBranchConnections(){
     const code=branchSelect.value;
-    if(!code){branchHost.innerHTML=empty('Choose a branch to inspect its graph connections.');return;}
-    branchHost.innerHTML=loadingMarkup('Loading connected graph records…');
+    if(!code){branchHost.innerHTML=empty('Choose a physical branch to inspect its graph connections.');return;}
+    branchHost.innerHTML=loadingMarkup('Loading physical branch connections…');
     try{
       const result=await request(`/relate/explorer?branch_codes=${encodeURIComponent(code)}`);
       const branch=(result.selected||[])[0];
-      if(!branch){branchHost.innerHTML=empty('The selected branch node was not found in the graph.');return;}
+      if(!branch){branchHost.innerHTML=empty('The selected physical branch node was not found in the graph.');return;}
       const groups=new Map();
       (branch.connections||[]).forEach(edge=>{
         const key=edge.relationship_type||'RELATED_TO';
         if(!groups.has(key))groups.set(key,{label:edge.relationship_label||key,count:0,records:[]});
         const group=groups.get(key);group.count++;group.records.push(edge);
       });
-      const relationshipMarkup=[...groups.entries()].sort((a,b)=>a[1].label.localeCompare(b[1].label)).map(([type,group])=>`<details class="graph-connection-group"><summary><strong>${esc(group.label)}</strong><span>${fmt(group.count)} connected ${group.count===1?'node':'nodes'}</span></summary><div class="graph-connection-records">${group.records.map((edge,index)=>`<details class="graph-node-details"><summary><strong>${esc(edge.target_title||edge.target_labels?.join(' · ')||`Connected node ${index+1}`)}</strong><small>${esc((edge.target_labels||[]).join(' · '))}</small></summary><div class="graph-node-inspection">${graphPropertiesMarkup(edge.properties)}${Object.keys(edge.relationship_properties||{}).length?`<h4>Relationship Properties</h4>${graphPropertiesMarkup(edge.relationship_properties)}`:''}</div></details>`).join('')}</div></details>`).join('');
-      branchHost.innerHTML=`<div class="graph-branch-node"><h3>${esc(branch.branch_name)}</h3><p class="small-note">Branch node properties stored in Relate</p>${graphPropertiesMarkup(branch.properties)}</div><div class="graph-branch-connections"><h3>Direct Connections</h3><p class="small-note">${fmt((branch.connections||[]).length)} connected records across ${fmt(groups.size)} relationship types.</p>${relationshipMarkup||empty('No direct relationships are stored for this branch.')}</div>`;
+      const relationshipMarkup=[...groups.entries()].sort((a,b)=>a[1].label.localeCompare(b[1].label)).map(([,group])=>`<details class="graph-connection-group"><summary><strong>${esc(group.label)}</strong><span>${fmt(group.count)} connected ${group.count===1?'node':'nodes'}</span></summary><div class="graph-connection-records">${group.records.map((edge,index)=>`<details class="graph-node-details"><summary><strong>${esc(edge.target_title||edge.target_labels?.join(' · ')||`Connected node ${index+1}`)}</strong><small>${esc((edge.target_labels||[]).join(' · '))}</small></summary><div class="graph-node-inspection">${graphPropertiesMarkup(edge.properties)}${Object.keys(edge.relationship_properties||{}).length?`<h4>Relationship Properties</h4>${graphPropertiesMarkup(edge.relationship_properties)}`:''}</div></details>`).join('')}</div></details>`).join('');
+      branchHost.innerHTML=`<div class="graph-branch-connections"><div class="graph-connection-summary"><strong>${esc(branch.branch_name)}</strong><span>${fmt((branch.connections||[]).length)} direct relationships across ${fmt(groups.size)} relationship types</span></div>${relationshipMarkup||empty('No direct relationships are stored for this physical branch.')}</div>`;
     }catch(error){branchHost.innerHTML=note(error.message||'Branch connections could not be loaded.','error');}
   }
+  $('#graph-node-search',graphHost).addEventListener('submit',event=>{event.preventDefault();loadNodePage(true);});
+  labelSelect.addEventListener('change',()=>loadNodePage(true));
+  moreButton.addEventListener('click',()=>loadNodePage(false));
   branchSelect.addEventListener('change',loadBranchConnections);
-  if(branchSelect.value)await loadBranchConnections();
+  attachTabs(graphHost,(_panel,index)=>{
+    if(index===2&&!$g('#graph-node-results').dataset.loaded){$g('#graph-node-results').dataset.loaded='1';return loadNodePage(true);}
+    if(index===3&&!$g('#graph-branch-record').dataset.loaded){$g('#graph-branch-record').dataset.loaded='1';return loadBranchConnections();}
+  });
 }
 
 async function renderEvents() {
@@ -624,7 +672,7 @@ async function renderEvents() {
 }
 
 $('#page-description').textContent='';
-const renderers={overview:renderOverview,branches:renderBranches,comparisons:renderComparisons,events:renderEvents,graph:renderGraphExplorer};
+const renderers={overview:renderOverview,branches:renderBranches,comparisons:renderComparisons,events:renderEvents};
 (async()=>{try{await (renderers[page]||renderOverview)();}catch(_){host.innerHTML=note('This section could not be loaded.','error');}finally{host.setAttribute('aria-busy','false');}})();
 
 // Global search is type-ahead and keyboard operable; server results use the same cached GET layer.

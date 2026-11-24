@@ -13,6 +13,11 @@ from app.config import RELATE_FILE
 from app.services.data_store import branch_records
 
 BRANCH_LABEL_FALLBACK = "BranchGeneralInformation"
+BRANCH_EDGE_TYPES = {
+    "HAS_CIRCULATION_RECORD", "HAS_VISITS_RECORD", "HAS_WORKSTATION_RECORD",
+    "HAS_REGISTRATION_RECORD", "HOSTS_EVENT", "IN_NEIGHBOURHOOD",
+    "IN_WARD", "OFFERS_SERVICE", "HAS_FACILITY",
+}
 NEIGHBOURHOOD_LABEL = "LibraryNeighbourhood"
 WARD_LABEL = "LibraryWard"
 SERVICE_LABEL = "LibraryService"
@@ -114,10 +119,23 @@ def _schema(connection) -> tuple[dict[str, dict[str, str]], list[str]]:
 
 
 def _branch_label(schema: dict[str, dict[str, str]]) -> tuple[str, dict[str, str]]:
+    # Prefer the branch directory label. Annual observation labels can also
+    # contain BranchCode and BranchName, so generic schema discovery is unsafe.
+    preferred = schema.get(BRANCH_LABEL_FALLBACK)
+    if preferred and "branchcode" in preferred and "physicalbranch" in preferred and ("branchname" in preferred or "name" in preferred):
+        return BRANCH_LABEL_FALLBACK, preferred
     for label, props in schema.items():
-        if "branchcode" in props and ("branchname" in props or "name" in props):
+        if "branchcode" in props and "physicalbranch" in props and ("branchname" in props or "name" in props):
             return label, props
-    raise GraphUnavailable("The Relate store does not contain a recognizable branch directory label.")
+    raise GraphUnavailable("The Relate store does not contain a physical branch directory with a PhysicalBranch field.")
+
+
+def _physical_branch_clause(alias: str, branch_props: dict[str, str]) -> str:
+    """Return the strict source flag predicate required for branch graph views."""
+    physical_property = branch_props.get("physicalbranch")
+    if not physical_property:
+        raise GraphUnavailable("The branch directory is missing PhysicalBranch; only physical branches can be inspected safely.")
+    return f"toString({alias}.{_quote(physical_property)}) = '1'"
 
 
 def _safe_properties(properties: Any) -> dict[str, Any]:
@@ -166,6 +184,8 @@ def _peer_branches_in_shared_areas(connection, branch_label: str, branch_props: 
     code_property = branch_props.get("branchcode")
     if not code_property:
         return []
+    physical_anchor = _physical_branch_clause("anchor", branch_props)
+    physical_peer = _physical_branch_clause("peer", branch_props)
     contexts = (
         ("neighbourhood", "IN_NEIGHBOURHOOD", NEIGHBOURHOOD_LABEL),
         ("ward", "IN_WARD", WARD_LABEL),
@@ -180,7 +200,8 @@ def _peer_branches_in_shared_areas(connection, branch_label: str, branch_props: 
         query = (
             f"MATCH (anchor:{_quote(branch_label)})-[:{_quote(relationship)}]->(area:{_quote(area_label)})"
             f"<-[:{_quote(relationship)}]-(peer:{_quote(branch_label)}) "
-            f"WHERE toLower(toString(anchor.{_quote(code_property)})) = $branch_code "
+            f"WHERE {physical_anchor} AND {physical_peer} "
+            f"AND toLower(toString(anchor.{_quote(code_property)})) = $branch_code "
             f"AND toLower(toString(peer.{_quote(code_property)})) <> $branch_code "
             f"{service_match} "
             f"RETURN properties(area) AS area_properties, properties(peer) AS peer_properties, {service_return}"
@@ -219,15 +240,117 @@ def _peer_branches_in_shared_areas(connection, branch_label: str, branch_props: 
     return sorted(peers.values(), key=lambda item: item["branch_name"].casefold())
 
 
+def _graph_insights(
+    connection,
+    branch_label: str,
+    branch_props: dict[str, str],
+    schema: dict[str, dict[str, str]],
+    physical_branch_count: int,
+) -> dict[str, Any]:
+    """Calculate graph-specific topology insights for physical branch nodes only."""
+    physical_b = _physical_branch_clause("b", branch_props)
+    code_property = branch_props.get("branchcode")
+    name_property = branch_props.get("branchname") or branch_props.get("name")
+
+    physical_rows = _rows(connection.execute(
+        f"MATCH (b:{_quote(branch_label)}) WHERE {physical_b} RETURN count(b) AS count"
+    ))
+    physical_graph_nodes = int((physical_rows[0].get("count") or 0) if physical_rows else 0)
+
+    connected_rows = _rows(connection.execute(
+        f"MATCH (b:{_quote(branch_label)})-[r]->() WHERE {physical_b} "
+        "RETURN count(DISTINCT b) AS branches, count(r) AS relationships"
+    ))
+    connected = connected_rows[0] if connected_rows else {}
+    connected_branches = int(connected.get("branches") or 0)
+    physical_relationships = int(connected.get("relationships") or 0)
+
+    top_branches = []
+    if code_property and name_property:
+        rows = _rows(connection.execute(
+            f"MATCH (b:{_quote(branch_label)})-[r]->() WHERE {physical_b} "
+            f"RETURN b.{_quote(code_property)} AS code, b.{_quote(name_property)} AS name, "
+            "count(r) AS connections ORDER BY connections DESC LIMIT 8"
+        ))
+        top_branches = [
+            {"code": str(row.get("code") or ""), "name": str(row.get("name") or row.get("code") or "Unknown branch"),
+             "connections": int(row.get("connections") or 0)}
+            for row in rows if row.get("code") is not None
+        ]
+
+    coverage = []
+    for relationship_type in sorted(BRANCH_EDGE_TYPES):
+        if relationship_type not in {
+            "IN_NEIGHBOURHOOD", "IN_WARD", "OFFERS_SERVICE", "HAS_FACILITY",
+            "HAS_CIRCULATION_RECORD", "HAS_VISITS_RECORD", "HAS_WORKSTATION_RECORD",
+            "HAS_REGISTRATION_RECORD", "HOSTS_EVENT",
+        }:
+            continue
+        try:
+            rows = _rows(connection.execute(
+                f"MATCH (b:{_quote(branch_label)})-[:{_quote(relationship_type)}]->() "
+                f"WHERE {physical_b} RETURN count(DISTINCT b) AS count"
+            ))
+            branch_coverage = int((rows[0].get("count") or 0) if rows else 0)
+        except Exception:
+            continue
+        coverage.append({
+            "type": relationship_type,
+            "label": RELATIONSHIP_LABELS.get(relationship_type, relationship_type.replace("_", " ").title()),
+            "branches": branch_coverage,
+            "percent": round(branch_coverage / physical_graph_nodes * 100, 1) if physical_graph_nodes else 0.0,
+        })
+    coverage.sort(key=lambda item: (-item["branches"], item["label"].casefold()))
+
+    area_hubs: dict[str, list[dict[str, Any]]] = {"neighbourhoods": [], "wards": []}
+    for key, area_label, relationship_type, number_aliases in (
+        ("neighbourhoods", NEIGHBOURHOOD_LABEL, "IN_NEIGHBOURHOOD", ("neighbourhood_no", "nbhdno")),
+        ("wards", WARD_LABEL, "IN_WARD", ("ward_no", "wardno")),
+    ):
+        if area_label not in schema:
+            continue
+        try:
+            rows = _rows(connection.execute(
+                f"MATCH (b:{_quote(branch_label)})-[:{_quote(relationship_type)}]->(a:{_quote(area_label)}) "
+                f"WHERE {physical_b} RETURN properties(a) AS properties, count(DISTINCT b) AS branches "
+                "ORDER BY branches DESC LIMIT 8"
+            ))
+        except Exception:
+            continue
+        for row in rows:
+            properties = row.get("properties") or {}
+            name = _branch_value(properties, ("name", "NeighbourhoodName", "WardName"))
+            number_value = _branch_value(properties, number_aliases)
+            if key == "wards":
+                title = f"{name} (Ward {number_value})" if name and number_value else name or (f"Ward {number_value}" if number_value else "Unlabelled ward")
+            else:
+                title = f"{name} (No. {number_value})" if name and number_value else name or (f"Neighbourhood {number_value}" if number_value else "Unlabelled neighbourhood")
+            area_hubs[key].append({"name": title, "branches": int(row.get("branches") or 0)})
+
+    return {
+        "physical_branches_in_directory": physical_branch_count,
+        "physical_branch_nodes": physical_graph_nodes,
+        "connected_physical_branches": connected_branches,
+        "unconnected_physical_branches": max(0, physical_graph_nodes - connected_branches),
+        "physical_branch_relationships": physical_relationships,
+        "average_relationships_per_physical_branch": round(physical_relationships / physical_graph_nodes, 2) if physical_graph_nodes else 0,
+        "top_connected_branches": top_branches,
+        "relationship_coverage": coverage,
+        "area_hubs": area_hubs,
+    }
+
+
 def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
-    """Return an inspectable summary of the persistent graph and selected branch paths."""
+    """Return graph structure, physical-branch-only topology insights and selected branch paths."""
     connection = open_graph(read_only=True)
     try:
         schema, relationship_types = _schema(connection)
         branch_label, branch_props = _branch_label(schema)
+        physical_clause = _physical_branch_clause("n", branch_props)
         node_counts = []
         for label in sorted(schema):
-            result = _rows(connection.execute(f"MATCH (n:{_quote(label)}) RETURN count(n) AS count"))
+            where = f" WHERE {physical_clause}" if label == branch_label else ""
+            result = _rows(connection.execute(f"MATCH (n:{_quote(label)}){where} RETURN count(n) AS count"))
             row = result[0] if result else {}
             node_counts.append({
                 "label": label,
@@ -239,33 +362,42 @@ def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
                     key=str.casefold,
                 ),
             })
+
         relationship_counts = []
         for rel_type in relationship_types:
-            result = _rows(connection.execute(
-                f"MATCH ()-[r:{_quote(rel_type)}]->() RETURN count(r) AS count"
-            ))
+            if rel_type in BRANCH_EDGE_TYPES:
+                query = (
+                    f"MATCH (b:{_quote(branch_label)})-[r:{_quote(rel_type)}]->() "
+                    f"WHERE {_physical_branch_clause('b', branch_props)} RETURN count(r) AS count"
+                )
+            else:
+                query = f"MATCH ()-[r:{_quote(rel_type)}]->() RETURN count(r) AS count"
+            result = _rows(connection.execute(query))
             row = result[0] if result else {}
             relationship_counts.append({
                 "type": rel_type,
                 "label": RELATIONSHIP_LABELS.get(rel_type, rel_type.replace("_", " ").title()),
                 "count": int((row or {}).get("count") or 0),
             })
+
         eligible = {b["code"].casefold(): b for b in branch_records()}
         selected = []
+        physical_b = _physical_branch_clause("b", branch_props)
+        physical_peer = _physical_branch_clause("peer", branch_props)
         for code in (branch_codes or [])[:5]:
             branch = eligible.get(str(code).casefold())
             if not branch:
                 continue
             branch_query = (
                 f"MATCH (b:{_quote(branch_label)}) "
-                f"WHERE toLower(toString(b.{_quote(branch_props['branchcode'])})) = $branch_code "
+                f"WHERE {physical_b} AND toLower(toString(b.{_quote(branch_props['branchcode'])})) = $branch_code "
                 "RETURN properties(b) AS properties LIMIT 1"
             )
             branch_rows = _rows(connection.execute(branch_query, {"branch_code": branch["code"].casefold()}))
             branch_properties = _safe_properties(branch_rows[0].get("properties") if branch_rows else {})
             query = (
                 f"MATCH (b:{_quote(branch_label)})-[r]->(n) "
-                f"WHERE toLower(toString(b.{_quote(branch_props['branchcode'])})) = $branch_code "
+                f"WHERE {physical_b} AND toLower(toString(b.{_quote(branch_props['branchcode'])})) = $branch_code "
                 "RETURN type(r) AS relationship_type, labels(n) AS labels, "
                 "properties(n) AS properties, properties(r) AS relationship_properties "
                 "LIMIT 5000"
@@ -294,15 +426,17 @@ def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
                 "connections": edges,
                 "peer_branches": peer_branches,
             })
+
+        insights = _graph_insights(connection, branch_label, branch_props, schema, len(eligible))
         return {
             "available": True,
-            "store": RELATE_FILE.name,
             "mode": "single-file",
             "node_count": sum(item["count"] for item in node_counts),
             "relationship_count": sum(item["count"] for item in relationship_counts),
             "node_counts": node_counts,
             "relationship_counts": relationship_counts,
             "branches": [{"code": b["code"], "name": b["name"]} for b in branch_records()],
+            "insights": insights,
             "selected": selected,
         }
     finally:
@@ -310,12 +444,13 @@ def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
 
 
 def inspect_graph_nodes(label: str, search: str = "", limit: int = 50, offset: int = 0) -> dict[str, Any]:
-    """Browse a bounded, read-only page of nodes for judging and graph inspection."""
+    """Browse a bounded, read-only page of graph nodes; branch directory rows are physical-only."""
     connection = open_graph(read_only=True)
     try:
-        schema, relationship_types = _schema(connection)
+        schema, _relationship_types = _schema(connection)
         if label not in schema:
             raise ValueError("Choose a node label returned by the graph schema.")
+        branch_label, branch_props = _branch_label(schema)
 
         properties = [
             key for key in schema[label].values()
@@ -324,12 +459,17 @@ def inspect_graph_nodes(label: str, search: str = "", limit: int = 50, offset: i
         ]
         term = str(search or "").strip()[:120]
         predicates = [f"toLower(toString(n.{_quote(key)})) CONTAINS $search" for key in properties]
-        where = " WHERE " + " OR ".join(predicates) if term and predicates else ""
-        parameters = {"search": term.casefold()} if term and predicates else {}
+        where_parts = []
+        parameters = {}
+        if label == branch_label:
+            where_parts.append(_physical_branch_clause("n", branch_props))
+        if term and predicates:
+            where_parts.append("(" + " OR ".join(predicates) + ")")
+            parameters["search"] = term.casefold()
+        where = " WHERE " + " AND ".join(where_parts) if where_parts else ""
 
         count_rows = _rows(connection.execute(
-            f"MATCH (n:{_quote(label)}){where} RETURN count(n) AS count",
-            parameters,
+            f"MATCH (n:{_quote(label)}){where} RETURN count(n) AS count", parameters
         ))
         total = int((count_rows[0].get("count") or 0) if count_rows else 0)
         safe_limit = max(1, min(int(limit), 100))
@@ -337,34 +477,22 @@ def inspect_graph_nodes(label: str, search: str = "", limit: int = 50, offset: i
         rows = _rows(connection.execute(
             f"MATCH (n:{_quote(label)}){where} "
             f"RETURN labels(n) AS labels, properties(n) AS properties "
-            f"SKIP {safe_offset} LIMIT {safe_limit}",
-            parameters,
+            f"SKIP {safe_offset} LIMIT {safe_limit}", parameters
         ))
         records = []
         for row in rows:
             raw = row.get("properties") or {}
             props = _safe_properties(raw)
             labels = [str(value) for value in row.get("labels") or [label]]
-            records.append({
-                "summary": _node_summary(labels, props),
-                "labels": labels,
-                "properties": props,
-            })
+            records.append({"summary": _node_summary(labels, props), "labels": labels, "properties": props})
         return {
-            "available": True,
-            "label": label,
-            "display_label": _humanize_label(label),
-            "search": term,
-            "total": total,
-            "offset": safe_offset,
-            "limit": safe_limit,
-            "has_more": safe_offset + len(records) < total,
-            "property_names": properties,
-            "records": records,
+            "available": True, "label": label, "display_label": _humanize_label(label),
+            "physical_branch_filter": "PhysicalBranch = 1" if label == branch_label else None,
+            "search": term, "total": total, "offset": safe_offset, "limit": safe_limit,
+            "has_more": safe_offset + len(records) < total, "property_names": properties, "records": records,
         }
     finally:
         connection.close()
-
 
 def activity_intensity_payload(branch_codes: list[str] | None = None) -> dict[str, Any]:
     """Calculate activity per 1,000 sq ft using only existing annual CSV snapshots."""

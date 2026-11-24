@@ -26,7 +26,7 @@ app.include_router(graph_features_router)
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 templates = Jinja2Templates(directory=ROOT / "templates")
 # Bump on source changes because static assets are served with immutable caching.
-STATIC_VERSION = "20261124-1"
+STATIC_VERSION = "20261124-2"
 
 
 class AskRequest(BaseModel):
@@ -228,10 +228,6 @@ async def comparisons_page(request: Request): return _page(request, "comparisons
 
 @app.get("/programs-events", response_class=HTMLResponse)
 async def events_page(request: Request): return _page(request, "events", "Programs & Events")
-
-
-@app.get("/graph-explorer", response_class=HTMLResponse)
-async def graph_explorer_page(request: Request): return _page(request, "graph", "Graph Explorer")
 
 
 @app.get("/overview")
