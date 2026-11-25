@@ -23,8 +23,11 @@ def test_branch_overview_uses_one_reporting_year_filter_for_rankings_and_area_ch
     assert "branchOverviewResults(data,panel.dataset.metric,select.value)" in source
     assert "branchTotals(data,metric,selectedYears)" in source
     assert "branchActivitySizeChart(data,metric,selectedYears)" in source
-    assert "Total across selected reporting years" in source
-    assert "Reporting Year: %{customdata[2]}" in source
+    assert "title:{text:METRICS[metric]}" in source
+    assert "`${METRICS[metric]} And Branch Area - ${yearLabel}`" in source
+    assert "const totals=new Map()" in source
+    assert "current.value+=Number(rawValue)" in source
+    assert "Reporting years with data: %{customdata[2]}" in source
     assert "Measure:" not in source
     assert "activity-size-year" not in source
 
@@ -142,3 +145,13 @@ def test_overview_ordinal_branch_question_uses_present_site_year_with_tie_note()
     assert "def _answer_ordinal_branch(" in source
     assert "Branches with the same present-site year are ordered alphabetically" in source
     assert "The source records the year of the current site" in source
+
+
+def test_library_network_explorer_confirms_a_live_relate_store_connection():
+    app = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
+    backend = (ROOT / "app/services/graph_enhancements.py").read_text(encoding="utf-8")
+    assert '"runtime": {"engine": "Relate", "connected": True, "store": RELATE_FILE.name}' in backend
+    assert 'runtime.connected' in app
+    assert 'Relate connected' in app
+    assert 'Persistent store:' in app
+    assert 'relate.connect(database=str(RELATE_FILE), read_only=read_only)' in backend

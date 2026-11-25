@@ -202,3 +202,9 @@
 .graph-node-toolbar{background:var(--surface);border:1px solid var(--line);border-radius:3px;padding:1rem}
 .graph-node-list{max-height:40rem;margin-top:.75rem}
 @media(max-width:900px){.graph-insight-grid,.graph-structure-grid{grid-template-columns:1fr}}
+
+
+/* Compact confirmation that the embedded Relate engine answered the explorer queries. */
+.relate-runtime-status{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin:0 0 14px;color:var(--muted);font-size:.84rem;line-height:1.4}
+.relate-runtime-status strong{color:var(--text);font-weight:650}
+.relate-runtime-indicator{width:7px;height:7px;flex:0 0 7px;border-radius:50%;background:#16865a;box-shadow:0 0 0 3px color-mix(in srgb,#16865a 14%,transparent)}

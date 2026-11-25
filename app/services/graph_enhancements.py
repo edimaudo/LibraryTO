@@ -444,6 +444,9 @@ def explorer_snapshot(branch_codes: list[str] | None = None) -> dict[str, Any]:
         return {
             "available": True,
             "mode": "single-file",
+            # This metadata is returned only after the embedded Relate client
+            # has opened the .rl store and the graph queries above succeeded.
+            "runtime": {"engine": "Relate", "connected": True, "store": RELATE_FILE.name},
             "node_count": sum(item["count"] for item in node_counts),
             "relationship_count": sum(item["count"] for item in relationship_counts),
             "node_counts": node_counts,

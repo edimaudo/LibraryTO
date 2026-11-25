@@ -217,7 +217,7 @@ function branchOverviewResults(data,metric,yearSelection='all') {
       customdata:items.map(x=>[x.branch.code,tierName(x.branch.service_tier_code),x.observations]),
       hovertemplate:'%{y}<br>Total reported: %{x:,.0f}<br>Branch code: %{customdata[0]}<br>%{customdata[1]}<extra></extra>'};
     return chart('',[trace],{height:390,margin:{l:160,r:28,t:26,b:65},title:{text:''},
-      xaxis:{rangemode:'tozero',title:'Total across selected reporting years'},
+      xaxis:{rangemode:'tozero',title:{text:METRICS[metric]}},
       yaxis:{autorange:'reversed',automargin:true},showlegend:false},label);
   };
   const yearLabel=yearSelection==='all'?'All Years':String(yearSelection);
@@ -241,21 +241,35 @@ function branchActivitySizeChart(data,metric,selectedYears=['all']) {
   const yearSet=new Set((selectedYears||['all']).map(String));
   const annualRows=yearSet.has('all')?allRows:allRows.filter(row=>yearSet.has(String(row.year)));
   if(!annualRows.length)return empty('No annual values are available for the selected reporting years.');
+
+  // One point per branch. When All is selected, sum that branch's reported
+  // observations across all available years instead of plotting one point per year.
+  const totals=new Map();
+  annualRows.forEach(annual=>{
+    (data.branches||[]).forEach(branch=>{
+      const rawValue=annual.values?.[branch.code];
+      if(rawValue===null||rawValue===undefined||rawValue===''||!Number.isFinite(Number(rawValue)))return;
+      const current=totals.get(branch.code)||{value:0,observations:0};
+      current.value+=Number(rawValue);
+      current.observations+=1;
+      totals.set(branch.code,current);
+    });
+  });
+  const aggregatedPoints=(data.branches||[])
+    .filter(branch=>Number(branch.square_footage)>0&&totals.has(branch.code))
+    .map(branch=>({branch,...totals.get(branch.code)}));
+
   const tiers=['DL','NL','RR','Other'];
   const traces=tiers.map(code=>{
-    const points=[];
-    annualRows.forEach(annual=>{
-      (data.branches||[]).filter(branch=>(branch.service_tier_code||'Other')===code&&Number(branch.square_footage)>0&&annual.values?.[branch.code]!==null&&annual.values?.[branch.code]!==undefined)
-        .forEach(branch=>points.push({branch,year:String(annual.year),value:Number(annual.values[branch.code])}));
-    });
+    const points=aggregatedPoints.filter(point=>(point.branch.service_tier_code||'Other')===code);
     return {type:'scatter',mode:'markers',name:tierName(code),x:points.map(point=>Number(point.branch.square_footage)),y:points.map(point=>point.value),
-      customdata:points.map(point=>[point.branch.name,point.branch.code,point.year]),
+      customdata:points.map(point=>[point.branch.name,point.branch.code,point.observations]),
       marker:{size:9,color:TIER_COLORS[code]||TIER_COLORS.Other,opacity:.78},
-      hovertemplate:'%{customdata[0]}<br>%{customdata[1]}<br>Reporting Year: %{customdata[2]}<br>Branch Area: %{x:,.0f} sq ft<br>Annual Activity: %{y:,.0f}<extra></extra>'};
+      hovertemplate:`%{customdata[0]}<br>Branch Area: %{x:,.0f} sq ft<br>${METRICS[metric]} total: %{y:,.0f}<br>Reporting years with data: %{customdata[2]}<extra></extra>`};
   }).filter(trace=>trace.x.length);
-  const yearLabel=yearSet.has('all')?'All Years':[...yearSet].join(', ');
+  const yearLabel=yearSet.has('all')?'All':[...yearSet].join(', ');
   if(!traces.length)return empty('No branches have both a reported annual value and floor area for these reporting years.');
-  return chart(`${METRICS[metric]} And Branch Area · ${yearLabel}`,traces,{height:390,margin:{l:82,r:25,t:58,b:100},
+  return chart(`${METRICS[metric]} And Branch Area - ${yearLabel}`,traces,{height:390,margin:{l:82,r:25,t:58,b:100},
     xaxis:{title:{text:'Branch Area (sq ft)',standoff:14},rangemode:'tozero'},
     yaxis:{title:METRICS[metric],rangemode:'tozero'},
     legend:{orientation:'h',y:-.3,yanchor:'top',x:.5,xanchor:'center'}});
@@ -532,6 +546,10 @@ async function renderGraphExplorer(target=host) {
   if(!graph.available){graphHost.innerHTML=empty('The Relate graph is not available.');return;}
 
   const insights=graph.insights||{};
+  const runtime=graph.runtime||{};
+  const runtimeLine=runtime.connected
+    ? `<p class="relate-runtime-status" role="status"><span class="relate-runtime-indicator" aria-hidden="true"></span><strong>Relate connected</strong><span>Persistent store: ${esc(runtime.store||'tpl_library_graph.rl')}</span></p>`
+    : '';
   const nodeTypes=(graph.node_counts||[]).slice().sort((a,b)=>String(a.display_label||a.label).localeCompare(String(b.display_label||b.label)));
   const relationshipTypes=(graph.relationship_counts||[]).slice().sort((a,b)=>String(a.label||a.type).localeCompare(String(b.label||b.type)));
   const branchLabel='BranchGeneralInformation';
@@ -548,6 +566,7 @@ async function renderGraphExplorer(target=host) {
   const structureRelationshipRows=relationshipTypes.map(item=>`<tr><th scope="row">${esc(item.label||item.type)}</th><td>${fmt(item.count)}</td></tr>`).join('');
 
   graphHost.innerHTML=`<div class="graph-explorer-shell">
+    ${runtimeLine}
     ${tabsMarkup(['Graph Insights','Graph Structure','Browse Nodes'],'graph-explorer-sections')}
     <section id="graph-explorer-sections-panel-0" class="tab-panel graph-inspector-panel" role="tabpanel" aria-labelledby="graph-explorer-sections-tab-0">
       <div class="graph-insight-grid">
