@@ -21,46 +21,27 @@ The key relationships are between a branch and its annual circulation, visit, wo
 - Relate
 - Vercel
 
-### How it uses Relate
-- **Mode:** Single file. LibraryTO uses a persistent Relate database at `data/tpl_library_graph.rl` and opens it in-process through the `relate-db` Python package (`import relate`).
-- **Why this mode:** A single persistent file gives the application one graph store to query. The web application opens graph connections in read-only mode, so its inspection and analytics requests do not modify the submitted store.
-- **What the graph models:**
-  - **Branch records** from Branch General Information, with `PhysicalBranch = 1` identifying the physical-branch directory used for branch-level rankings and peer analysis.
-  - **Annual activity records** for circulation, visits, workstation usage and card registrations.
-  - **Events**, **neighbourhoods**, **wards**, **reported services**, **facilities** and **geography records**.
-  - **Relationships** including `HAS_CIRCULATION_RECORD`, `HAS_VISITS_RECORD`, `HAS_WORKSTATION_RECORD`, `HAS_REGISTRATION_RECORD`, `HOSTS_EVENT`, `IN_NEIGHBOURHOOD`, `IN_WARD`, `OFFERS_SERVICE`, `HAS_FACILITY` and `HAS_GEOGRAPHY_RECORD`.
 
-The graph is used by connected-context Q&A, Branch Insights and Branch Comparisons. It supports finding branches in the same neighbourhood or ward, comparing reported services across selected branches, and exploring how widely a reported service is distributed. These are measures of recorded coverage and connectivity, not measures of service quality, demand or community outcomes.
+## How it uses Relate
 
-Judges can inspect the live graph through **Overview → Library Network Explorer**:
+- **Mode:** Single-file database. LibraryTO uses a persistent Relate graph store at `data/tpl_library_graph.rl`, accessed in-process through the `relate-db` Python package. The application opens the graph in read-only mode.
 
-1. Confirm the **Relate connected** runtime status and the persistent store filename.
-2. Use **Graph Structure** to inspect the node labels, node counts, relationship types and relationship counts queried from the store.
-3. Use **Browse Nodes** to search graph records and inspect their stored source properties.
-4. Ask a relationship-based question in Q&A, such as `Which branches in Ward 1 offer a Digital Innovation Hub?`.
-5. Explore connected peers and service context in **Branch Insights → Branch Explorer** and **Branch Comparisons → Branch Explorer**.
+- **Why this mode:** The central challenge LibraryTO addresses is that information about Toronto Public Library branches is spread across separate datasets. Looking at circulation, visits, events, geography and services independently provides only a partial picture of a branch and its role in the community.
 
-For direct inspection, the same store can be opened with the Relate CLI from the repository root:
+  Relate allows LibraryTO to model the connections between these datasets directly. Instead of building separate joins for every feature or question, the application can traverse relationships from a branch to its activity records, neighbourhood, ward, events and services, and then follow those connections to other branches. This is particularly valuable for questions that require multiple steps. For example, identifying all branches in a particular ward that offer a Digital Innovation Hub involves connecting a ward to its branches and then those branches to their reported services.
 
-```bash
-relate info --database data/tpl_library_graph.rl
-relate query --database data/tpl_library_graph.rl --read-only
-```
+  This relationship-first approach supports the Library Network Explorer, Branch Explorer, branch comparisons and relationship-based Q&A using a shared graph model. It also makes it easier to extend the application as additional datasets and relationships are introduced.
 
-At the `cypher>` prompt, `.info` displays store information. These read-only queries inspect physical-branch records and traverse their stored relationships:
+  A single-file store suits the application's architecture because it provides persistent graph data without requiring a separately operated database server. The application can query the same stored graph locally, with read-only access protecting the underlying data. The graph is generated from the supplied CSV snapshots using `scripts/build_relate_graph.py`.
 
-```cypher
-MATCH (b:BranchGeneralInformation)
-WHERE toString(b.PhysicalBranch) = '1'
-RETURN b.BranchCode, b.BranchName, b.PresentSiteYear
-ORDER BY b.BranchName
-LIMIT 25;
+- **What the graph models:** The graph represents Toronto Public Library's physical branches and their connections to operational, geographic and community information across seven CSV datasets:
+  - **Physical branches:** Branch directory records, using `PhysicalBranch = 1` to identify physical library locations.
+  - **Annual activity:** Circulation, visits, workstation usage and card registration records associated with individual branches.
+  - **Programs and events:** Event records associated with the branches hosting them.
+  - **Geography:** Neighbourhoods, municipal wards and available neighbourhood geography records.
+  - **Services and facilities:** Reported branch services and facilities, represented as connected entities so the application can explore their distribution across the library network.
 
-MATCH (b:BranchGeneralInformation)-[r]->(connected)
-WHERE toString(b.PhysicalBranch) = '1'
-RETURN b.BranchName, type(r) AS relationship, labels(connected) AS connected_node_type
-LIMIT 50;
-```
+  These connections are represented through typed relationships, including `HAS_CIRCULATION_RECORD`, `HAS_VISITS_RECORD`, `HAS_WORKSTATION_RECORD`, `HAS_REGISTRATION_RECORD`, `HOSTS_EVENT`, `IN_NEIGHBOURHOOD`, `IN_WARD`, `OFFERS_SERVICE`, `HAS_FACILITY` and `HAS_GEOGRAPHY_RECORD`.
 
 ## Setup and run
 
@@ -119,3 +100,4 @@ data/tpl-Neighbourhoods.csv
 ```
 
 The application queries `data/tpl_library_graph.rl` directly; it does not substitute a JSON export or an in-memory mock graph. Keep the `.rl` file alongside the source data when reproducing the project. The annual CSV snapshots end in 2024 for circulation, visits and card registrations, and in 2023 for workstation sessions; the application does not infer or fabricate later observations.
+
