@@ -35,6 +35,13 @@ def test_branch_overview_uses_consistent_annual_aggregation_and_metric_axis_labe
     assert "activity-size-year" not in source
 
 
+def test_branch_overview_asset_cache_is_busted_for_chart_revision():
+    main = (ROOT / "main.py").read_text(encoding="utf-8")
+    template = (ROOT / "templates/index.html").read_text(encoding="utf-8")
+    assert 'STATIC_VERSION = "20261125-1"' in main
+    assert "?v={{ static_version }}" in template
+
+
 def test_location_map_defaults_to_all_reporting_years():
     source = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
     overview = source.split("async function renderOverview() {", 1)[1].split("function branchPicker(", 1)[0]

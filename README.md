@@ -1,93 +1,41 @@
 # LibraryTO
 
-**Explore Toronto Public Library branches, annual activity, services, programs and connected neighbourhood context.**
+**A connected view of Toronto Public Library branches, their annual activity, reported services, events and neighbourhood context.**
 
-LibraryTO uses the seven CSV snapshots already in `data/`. It does not query external data sources. Physical-branch records are used for branch analysis; records explicitly marked `PhysicalBranch = 0` are excluded.
+## Use case
 
-## Relate graph
+LibraryTO helps library staff, municipal analysts and community partners understand how Toronto Public Library branches relate to the places they serve and the services they report. The source data is distributed across separate CSV snapshots; by connecting the records, LibraryTO makes it possible to explore questions that are difficult to answer from isolated tables.
 
-- **Mode:** Persistent single-file Relate database, opened in-process through the official Python client (`relate-db`, imported as `relate`).
-- **Store:** `data/tpl_library_graph.rl`.
-- **Why:** A committed, local graph file is straightforward to run and inspect; the application opens it read-only.
-- **Runtime proof:** The Library Network Explorer queries the store through the embedded Relate engine. A successful response displays **Relate connected** and the store filename; the message is rendered only after the store opens and its graph queries succeed.
-- **Nodes:** Branches, annual circulation, visits, workstation sessions and card registrations, events, neighbourhood geography, wards, services and facilities.
-- **Relationships:** `HAS_CIRCULATION_RECORD`, `HAS_VISITS_RECORD`, `HAS_WORKSTATION_RECORD`, `HAS_REGISTRATION_RECORD`, `HOSTS_EVENT`, `IN_NEIGHBOURHOOD`, `IN_WARD`, `OFFERS_SERVICE`, `HAS_FACILITY` and `HAS_GEOGRAPHY_RECORD`.
+The important relationships are between a physical branch and its annual circulation, visit, workstation-use and card-registration records; the events hosted by a branch; the neighbourhood and ward in which it is located; and the services and facilities it reports. These connections support branch-level exploration, comparisons between branches, service-reach analysis and relationship-based Q&A. Branch-directory analysis is restricted to records where `PhysicalBranch = 1`.
 
-The application uses these edges for connected-context Q&A and the Branch Explorer in Branch Insights and Branch Comparisons. Branch Insights uses the branch selected in Find a branch to identify peers in the same ward or neighbourhood, rank the closest local connections by shared graph relationships, and compare the reach of reported services across the peer group. Branch Comparisons shows pairwise shared neighbourhoods, wards and services, plus a service-coverage matrix. These are descriptive relationship measures, not service-quality or community-need scores. All insights are derived from the existing CSV snapshots and their Relate graph connections.
+## How it uses Relate
 
-The **Library Network Explorer** is a subtab within Overview and is the judge-facing graph inspection interface. It uses the same committed single-file Relate store that powers Q&A. Graph Insights ranks the ten physical branches with the most direct relationships, the ten neighbourhoods and wards connected to the most physical branches, and the ten services with the widest physical-branch reach. Graph Structure exposes node labels, record counts, relationship types and edge counts. Browse Nodes is a record-level audit tool: judges can search a node type, inspect the stored source properties, and verify that relationships are backed by actual CSV-derived records. Branch General Information results are strictly filtered to `PhysicalBranch = 1`. All branch-level graph counts, rankings and peer queries exclude records not marked `PhysicalBranch = 1`. `/relate/explorer` exposes graph structure and topology insights; `/relate/inspect` provides bounded, searchable node browsing, returning up to 100 nodes per request with support for additional result pages. The graph connection details remain available to the backend for connected-context Q&A but are not presented as a separate Overview panel.
+- **Mode:** Single file. LibraryTO uses a persistent Relate database at `data/tpl_library_graph.rl` and opens it in-process through the `relate-db` Python package (`import relate`).
+- **Why this mode:** A single persistent file gives the application one graph store to query and gives judges a concrete artifact they can inspect directly. The web application opens graph connections in read-only mode, so its inspection and analytics requests do not modify the submitted store.
+- **What the graph models:**
+  - **Branch records** from Branch General Information, with `PhysicalBranch = 1` identifying the physical-branch directory used for branch-level rankings and peer analysis.
+  - **Annual activity records** for circulation, visits, workstation usage and card registrations.
+  - **Events**, **neighbourhoods**, **wards**, **reported services**, **facilities** and **geography records**.
+  - **Relationships** including `HAS_CIRCULATION_RECORD`, `HAS_VISITS_RECORD`, `HAS_WORKSTATION_RECORD`, `HAS_REGISTRATION_RECORD`, `HOSTS_EVENT`, `IN_NEIGHBOURHOOD`, `IN_WARD`, `OFFERS_SERVICE`, `HAS_FACILITY` and `HAS_GEOGRAPHY_RECORD`.
 
-Overview Q&A supports ordinal branch-history questions such as `What was the 5th branch to open?`. These are ranked using `PresentSiteYear`, which records the year of the current site, not necessarily when the library service first opened. Branches with the same recorded year are ordered alphabetically by branch name; the answer discloses this tie-handling rule.
+The graph is used by connected-context Q&A, Branch Insights and Branch Comparisons. It supports finding branches in the same neighbourhood or ward, comparing reported services across selected branches, and exploring how widely a reported service is distributed. These are measures of recorded coverage and connectivity, not measures of service quality, demand or community outcomes.
 
-## Judge walkthrough and criteria alignment
+Judges can inspect the live graph through **Overview → Library Network Explorer**:
 
-Use this sequence to confirm that the submitted application is running against Relate:
+1. Confirm the **Relate connected** runtime status and the persistent store filename.
+2. Use **Graph Structure** to inspect the node labels, node counts, relationship types and relationship counts queried from the store.
+3. Use **Browse Nodes** to search graph records and inspect their stored source properties.
+4. Ask a relationship-based question in Q&A, such as `Which branches in Ward 1 offer a Digital Innovation Hub?`.
+5. Explore connected peers and service context in **Branch Insights → Branch Explorer** and **Branch Comparisons → Branch Explorer**.
 
-1. Start LibraryTO and open **Overview → Library Network Explorer**. Confirm the **Relate connected** line names `tpl_library_graph.rl`.
-2. Open **Graph Structure** to inspect the node labels, node counts, relationship types and relationship counts returned from the live store.
-3. Open **Browse Nodes**, select **Branch General Information**, and inspect individual source properties. Search for a branch name and expand its record.
-4. Ask `Which branches in Ward 1 offer a Digital Innovation Hub?` in Q&A. The answer should be grounded in the stored `IN_WARD` and `OFFERS_SERVICE` relationships.
-5. Open **Branch Insights → Branch Explorer** for a selected branch, then **Branch Comparisons → Branch Explorer** to inspect the connected peer and service context across branches.
-6. For direct store inspection, use the Relate CLI commands in **Inspect the Relate store directly** below.
-
-The project maps to the judging criteria as follows:
-
-- **Creativity:** Applies a property graph to a public-library network, joining branch records to service, geographic, event and annual-activity context rather than treating each CSV as an isolated report.
-- **Relate and connected context:** Uses an on-disk `.rl` store and actual graph traversals for neighbourhood/ward peers, reported-service reach, branch comparisons and relationship-based Q&A. The explorer lets judges inspect the graph schema and stored node properties.
-- **Functionality and completeness:** Includes annual branch rankings, branch-area analysis, mapping, branch-level insights, peer comparisons and natural-language questions over connected records.
-- **Usefulness:** Supports library administrators, municipal analysts and community partners reviewing where reported services are present and how branches connect to neighbourhoods and wards. The measures are descriptive coverage, not proof of service quality, unmet demand or social outcomes.
-- **Documentation and reproducibility:** Documents the data inputs, graph model, one-time graph build, local startup, judge walkthrough and direct inspection of the same persistent store.
-
-## Application sections
-
-- **Overview:** The **Branch Overview** tab groups annual metric rankings and the branch-area comparison under one **Reporting Year** selector. It defaults to **All Years**, which filters both the Top 10/Bottom 10 rankings and the annual activity-versus-area chart. The Top 10/Bottom 10 horizontal axis is labelled with the selected metric. The activity-versus-area chart aggregates each branch's reported values across the selected years; with All Years selected, it displays one cumulative point per branch and is titled, for circulation, **Annual Circulation And Branch Area - All**. The **Location** tab also defaults to **All Years**; map colours reflect cumulative reported activity across the available years.
-- **Branch Insights:** **Branch Information** includes hours, public parking, neighbourhood, ward and reported services. **Activity & Forecast** combines the historical series and its forecast in one graph per measure. **Branch Explorer** uses the branch selected through **Find a branch** to identify same-area peer branches and compare reported service coverage.
-- **Branch Comparisons:** **Branch Explorer** is a separate subtab. It shows pairwise shared neighbourhoods, wards and services, plus a reported-service matrix across the selected branches.
-
-## Setup and run
-
-Requires Python 3.12.
-
-```bash
-python3.12 -m venv .venv
-source .venv/bin/activate  # Windows: .venv\\Scripts\\activate
-python -m pip install -r requirements-dev.txt
-```
-
-The source overlay does not replace the repository's CSV files or binary graph store. Install the Relate Python client explicitly if it is not already included in the project's dependency files:
-
-```bash
-python -m pip install relate-db
-```
-
-The previous graph import contained CSV-derived nodes but no explicit edges. **Run this one-time graph build after applying the overlay** to create the relationship model and replace `data/tpl_library_graph.rl` with the validated store:
-
-```bash
-python scripts/build_relate_graph.py
-```
-
-The builder reads only the seven committed CSV snapshots, creates a staging database, validates the expected relationship types and counts, and replaces the graph file only after validation succeeds. It also preserves a backup of the previous graph in the system temporary directory. Stop the application before running it.
-
-Start the application:
-
-```bash
-uvicorn main:app --reload
-```
-
-Open `http://127.0.0.1:8000`. Try asking `Which branches in Ward 1 offer a Digital Innovation Hub?` or `What was the 5th branch to open?` (the latter is ranked by current-site year, not original service founding date). In Branch Insights, select a branch and open **Branch Explorer** to inspect local peers and reported service reach. Open the **Library Network Explorer** subtab within **Overview** to inspect the top connected physical branches, neighbourhood and ward hubs, service reach, node labels, relationship types and stored node properties.
-
-### Inspect the Relate store directly
-
-Judges can inspect the same persistent file used by the application, not a JSON export or a mock graph. From the repository root, run:
-
-Install the [Relate CLI](https://github.com/relatedb/relate#install), then run:
+For direct inspection, the same store can be opened with the Relate CLI from the repository root:
 
 ```bash
 relate info --database data/tpl_library_graph.rl
 relate query --database data/tpl_library_graph.rl --read-only
 ```
 
-At the `cypher>` prompt, run `.info` to see the store's node and relationship counts, then try these read-only queries:
+At the `cypher>` prompt, `.info` displays store information. These read-only queries inspect physical-branch records and traverse their stored relationships:
 
 ```cypher
 MATCH (b:BranchGeneralInformation)
@@ -102,9 +50,35 @@ RETURN b.BranchName, type(r) AS relationship, labels(connected) AS connected_nod
 LIMIT 50;
 ```
 
-The first query inspects physical-branch source records. The second traverses actual stored edges from those branches. In the running app, **Library Network Explorer** exposes node and relationship counts, relationship types and searchable stored node properties. `GET /status` also returns the application's Relate status payload. The CLI commands open the same `.rl` file used by the app; `--read-only` prevents inspection from modifying it.
+## Setup and run
 
-## Validation
+**Prerequisites:** Python 3.12, the project source and CSV files, and the persistent Relate store. Run these commands from the repository root.
+
+Create and activate a virtual environment, then install the project dependencies and Relate client:
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate  # Windows PowerShell: .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev.txt
+python -m pip install relate-db
+```
+
+If the persistent graph store has not yet been created, or the graph needs to be rebuilt after changing its model or source data, run the repository's one-time graph builder:
+
+```bash
+python scripts/build_relate_graph.py
+```
+
+Then start the application:
+
+```bash
+uvicorn main:app --reload
+```
+
+Open `http://127.0.0.1:8000`. For a first result, open **Overview → Library Network Explorer** and confirm that it reports **Relate connected**. Then try the Q&A question `Which branches in Ward 1 offer a Digital Innovation Hub?`, or open **Branch Insights**, select a branch using **Find a branch**, and inspect its **Branch Explorer** relationships.
+
+To run the project's validation checks:
 
 ```bash
 python scripts/validate_relate_graph.py
@@ -112,6 +86,24 @@ python scripts/validate_accessibility.py
 python -m pytest -q
 ```
 
-The source-level accessibility checks pass in this update. They do not replace manual browser testing with keyboard-only navigation, screen readers, zoom/reflow and mobile viewports; see `ACCESSIBILITY_VALIDATION.md`.
+## Where the data lives
 
-The annual CSV snapshots end in 2024 for circulation, visits and card registrations, and 2023 for workstation sessions. No 2025 or 2026 observations are inferred or fabricated.
+The persistent Relate graph store is:
+
+```text
+data/tpl_library_graph.rl
+```
+
+The graph is built from the seven CSV snapshots in `data/`:
+
+```text
+data/tpl-branch-general-information.csv
+data/tpl-circulation-annual-by-branch.csv
+data/tpl-visits-annual-by-branch.csv
+data/tpl-workstation-usage-annual-by-branch.csv
+data/tpl-card-registrations-annual-by-branch.csv
+data/tpl-events-feed.csv
+data/tpl-Neighbourhoods.csv
+```
+
+The application queries `data/tpl_library_graph.rl` directly; it does not substitute a JSON export or an in-memory mock graph. Keep the `.rl` file alongside the source data when reproducing the project. The annual CSV snapshots end in 2024 for circulation, visits and card registrations, and in 2023 for workstation sessions; the application does not infer or fabricate later observations.
