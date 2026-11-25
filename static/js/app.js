@@ -191,42 +191,49 @@ function serviceTierCharts(data) {
     return `<article class="panel">${chart(METRICS[metric],traces,{height:310},`${METRICS[metric]} by library type`)}</article>`;
   }).join('');
 }
-function branchTotals(data,metric,selectedYears=['all']) {
-  const yearSet=new Set((selectedYears||['all']).map(String));
+function branchTotals(data,metric,yearSelection='all') {
+  const annualRows=data.annual_values?.[metric]||[];
+  const selectedRows=yearSelection==='all'
+    ? annualRows
+    : annualRows.filter(row=>String(row.year)===String(yearSelection));
   const totals=new Map(),counts=new Map();
-  (data.annual_values?.[metric]||[]).forEach(year=>{
-    if(!yearSet.has('all')&&!yearSet.has(String(year.year)))return;
-    data.branches.forEach(branch=>{
+
+  // All Years means a sum of each branch's reported values across every
+  // available reporting year, not a year-by-year set of scatter points.
+  selectedRows.forEach(year=>{
+    (data.branches||[]).forEach(branch=>{
       const value=year.values?.[branch.code];
-      if(value===null||value===undefined||!Number.isFinite(Number(value)))return;
+      if(value===null||value===undefined||value===''||!Number.isFinite(Number(value)))return;
       totals.set(branch.code,(totals.get(branch.code)||0)+Number(value));
       counts.set(branch.code,(counts.get(branch.code)||0)+1);
     });
   });
-  return data.branches.map(branch=>({branch,value:totals.get(branch.code)??null,observations:counts.get(branch.code)||0}))
+
+  return (data.branches||[])
+    .map(branch=>({branch,value:totals.has(branch.code)?totals.get(branch.code):null,observations:counts.get(branch.code)||0}))
     .filter(row=>row.value!==null);
 }
 function branchOverviewResults(data,metric,yearSelection='all') {
-  const selectedYears=yearSelection==='all'
-    ? (data.annual_values?.[metric]||[]).map(row=>String(row.year))
-    : [String(yearSelection)];
-  const rows=branchTotals(data,metric,selectedYears).sort((a,b)=>a.value-b.value);
-  const build=(items,label)=>{
+  const rows=branchTotals(data,metric,yearSelection).sort((a,b)=>a.value-b.value);
+  const metricLabel=metricName(metric);
+  const yearLabel=yearSelection==='all'?'All':String(yearSelection);
+  const activityAreaTitle=`${metricLabel} And Branch Area - ${yearLabel}`;
+  const build=(items,rankLabel)=>{
     if(!items.length)return empty('No reported values are available for the selected reporting years.');
     const trace={type:'bar',orientation:'h',x:items.map(x=>x.value),y:items.map(x=>x.branch.name),marker:{color:'#286b83'},
       customdata:items.map(x=>[x.branch.code,tierName(x.branch.service_tier_code),x.observations]),
-      hovertemplate:'%{y}<br>Total reported: %{x:,.0f}<br>Branch code: %{customdata[0]}<br>%{customdata[1]}<extra></extra>'};
-    return chart('',[trace],{height:390,margin:{l:160,r:28,t:26,b:65},title:{text:''},
-      xaxis:{rangemode:'tozero',title:{text:METRICS[metric]}},
-      yaxis:{autorange:'reversed',automargin:true},showlegend:false},label);
+      hovertemplate:`%{y}<br>${metricLabel}: %{x:,.0f}<br>Branch code: %{customdata[0]}<br>%{customdata[1]}<extra></extra>`};
+    return chart('',[trace],{height:390,margin:{l:160,r:28,t:24,b:84},title:{text:''},
+      xaxis:{rangemode:'tozero',automargin:true,title:{text:metricLabel,standoff:12}},
+      yaxis:{autorange:'reversed',automargin:true},showlegend:false},
+      `${rankLabel} branches by ${metricLabel} · ${yearSelection==='all'?'All Years':yearSelection}`);
   };
-  const yearLabel=yearSelection==='all'?'All Years':String(yearSelection);
-  const chartView=branchActivitySizeChart(data,metric,selectedYears);
+  const chartView=branchActivitySizeChart(data,metric,rows,activityAreaTitle);
   return `<div class="grid-2 ranking-charts">
-      <section class="rank-chart-section"><h3>Top 10 Branches</h3>${build(rows.slice(-10).reverse(),`Top 10 branches by ${METRICS[metric]} · ${yearLabel}`)}</section>
-      <section class="rank-chart-section"><h3>Bottom 10 Branches</h3>${build(rows.slice(0,10),`Bottom 10 branches by ${METRICS[metric]} · ${yearLabel}`)}</section>
+      <section class="rank-chart-section"><h3>Top 10 Branches</h3>${build(rows.slice(-10).reverse(),'Top 10')}</section>
+      <section class="rank-chart-section"><h3>Bottom 10 Branches</h3>${build(rows.slice(0,10),'Bottom 10')}</section>
     </div>
-    <section class="rank-chart-section branch-size-section"><h3>Annual Activity And Branch Area</h3><div class="activity-size-chart">${chartView}</div></section>`;
+    <section class="rank-chart-section branch-size-section"><h3>${esc(activityAreaTitle)}</h3><div class="activity-size-chart">${chartView}</div></section>`;
 }
 function rankingMetricPanel(data,metric,index) {
   const years=(data.annual_values?.[metric]||[]).map(row=>String(row.year));
@@ -236,43 +243,25 @@ function rankingMetricPanel(data,metric,index) {
     <div class="branch-overview-results">${branchOverviewResults(data,metric,'all')}</div>
   </section>`;
 }
-function branchActivitySizeChart(data,metric,selectedYears=['all']) {
-  const allRows=data.annual_values?.[metric]||[];
-  const yearSet=new Set((selectedYears||['all']).map(String));
-  const annualRows=yearSet.has('all')?allRows:allRows.filter(row=>yearSet.has(String(row.year)));
-  if(!annualRows.length)return empty('No annual values are available for the selected reporting years.');
-
-  // One point per branch. When All is selected, sum that branch's reported
-  // observations across all available years instead of plotting one point per year.
-  const totals=new Map();
-  annualRows.forEach(annual=>{
-    (data.branches||[]).forEach(branch=>{
-      const rawValue=annual.values?.[branch.code];
-      if(rawValue===null||rawValue===undefined||rawValue===''||!Number.isFinite(Number(rawValue)))return;
-      const current=totals.get(branch.code)||{value:0,observations:0};
-      current.value+=Number(rawValue);
-      current.observations+=1;
-      totals.set(branch.code,current);
-    });
-  });
-  const aggregatedPoints=(data.branches||[])
-    .filter(branch=>Number(branch.square_footage)>0&&totals.has(branch.code))
-    .map(branch=>({branch,...totals.get(branch.code)}));
-
+function branchActivitySizeChart(data,metric,aggregatedRows,chartTitle) {
+  const aggregatedPoints=(aggregatedRows||[])
+    .filter(row=>Number(row.branch.square_footage)>0)
+    .map(row=>({branch:row.branch,value:row.value,observations:row.observations}));
   const tiers=['DL','NL','RR','Other'];
   const traces=tiers.map(code=>{
     const points=aggregatedPoints.filter(point=>(point.branch.service_tier_code||'Other')===code);
     return {type:'scatter',mode:'markers',name:tierName(code),x:points.map(point=>Number(point.branch.square_footage)),y:points.map(point=>point.value),
       customdata:points.map(point=>[point.branch.name,point.branch.code,point.observations]),
       marker:{size:9,color:TIER_COLORS[code]||TIER_COLORS.Other,opacity:.78},
-      hovertemplate:`%{customdata[0]}<br>Branch Area: %{x:,.0f} sq ft<br>${METRICS[metric]} total: %{y:,.0f}<br>Reporting years with data: %{customdata[2]}<extra></extra>`};
+      hovertemplate:`%{customdata[0]}<br>Branch Area: %{x:,.0f} sq ft<br>${metricName(metric)} total: %{y:,.0f}<br>Reporting years with data: %{customdata[2]}<extra></extra>`};
   }).filter(trace=>trace.x.length);
-  const yearLabel=yearSet.has('all')?'All':[...yearSet].join(', ');
   if(!traces.length)return empty('No branches have both a reported annual value and floor area for these reporting years.');
-  return chart(`${METRICS[metric]} And Branch Area - ${yearLabel}`,traces,{height:390,margin:{l:82,r:25,t:58,b:100},
-    xaxis:{title:{text:'Branch Area (sq ft)',standoff:14},rangemode:'tozero'},
-    yaxis:{title:METRICS[metric],rangemode:'tozero'},
-    legend:{orientation:'h',y:-.3,yanchor:'top',x:.5,xanchor:'center'}});
+  // The section heading is the visible chart title; the same title is retained
+  // in the chart's accessible label for screen-reader users.
+  return chart('',traces,{height:390,margin:{l:82,r:25,t:24,b:100},title:{text:''},
+    xaxis:{title:{text:'Branch Area (sq ft)',standoff:14},rangemode:'tozero',automargin:true},
+    yaxis:{title:{text:metricName(metric)},rangemode:'tozero',automargin:true},
+    legend:{orientation:'h',y:-.3,yanchor:'top',x:.5,xanchor:'center'}},chartTitle);
 }
 function rankingTabs(data) {
   const keys=Object.keys(METRICS);

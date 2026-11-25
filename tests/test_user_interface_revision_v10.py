@@ -16,17 +16,20 @@ def test_overview_renames_annual_metric_to_branch_overview():
     assert "'Annual metric'" not in overview
 
 
-def test_branch_overview_uses_one_reporting_year_filter_for_rankings_and_area_chart():
+def test_branch_overview_uses_consistent_annual_aggregation_and_metric_axis_labels():
     source = (ROOT / "static/js/app.js").read_text(encoding="utf-8")
     assert 'branch-overview-year' in source
     assert '<option value="all" selected>All Years</option>' in source
     assert "branchOverviewResults(data,panel.dataset.metric,select.value)" in source
-    assert "branchTotals(data,metric,selectedYears)" in source
-    assert "branchActivitySizeChart(data,metric,selectedYears)" in source
-    assert "title:{text:METRICS[metric]}" in source
-    assert "`${METRICS[metric]} And Branch Area - ${yearLabel}`" in source
-    assert "const totals=new Map()" in source
-    assert "current.value+=Number(rawValue)" in source
+    assert "function branchTotals(data,metric,yearSelection='all')" in source
+    assert "yearSelection==='all'" in source
+    assert "selectedRows.forEach(year=>" in source
+    assert "function branchActivitySizeChart(data,metric,aggregatedRows,chartTitle)" in source
+    assert "const metricLabel=metricName(metric)" in source
+    assert "title:{text:metricLabel,standoff:12}" in source
+    assert "const activityAreaTitle=`${metricLabel} And Branch Area - ${yearLabel}`" in source
+    assert "<h3>${esc(activityAreaTitle)}</h3>" in source
+    assert "branchActivitySizeChart(data,metric,rows,activityAreaTitle)" in source
     assert "Reporting years with data: %{customdata[2]}" in source
     assert "Measure:" not in source
     assert "activity-size-year" not in source
