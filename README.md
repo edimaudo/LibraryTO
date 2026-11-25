@@ -1,15 +1,27 @@
 # LibraryTO
 
-**A connected view of Toronto Public Library branches, their annual activity, reported services, events and neighbourhood context.**
+LibraryTO is a civic intelligence app designed to transform [Toronto Public Library (TPL)](https://tpl.ca/about-the-library/open-data/) open data into actionable operational insights.
 
-## Use case
+## Key Features
+- Overview
+- Branch Insights
+- Branch Comparisons
+- Programs & Events
 
-LibraryTO helps library staff, municipal analysts and community partners understand how Toronto Public Library branches relate to the places they serve and the services they report. The source data is distributed across separate CSV snapshots; by connecting the records, LibraryTO makes it possible to explore questions that are difficult to answer from isolated tables.
+## Use Case
+LibraryTO helps denizens and community partners understand how Toronto Public Library branches relate to the places they serve and the services they provide. The source data from [Toronto Public Library (TPL) open data](https://tpl.ca/about-the-library/open-data/). 
 
-The important relationships are between a physical branch and its annual circulation, visit, workstation-use and card-registration records; the events hosted by a branch; the neighbourhood and ward in which it is located; and the services and facilities it reports. These connections support branch-level exploration, comparisons between branches, service-reach analysis and relationship-based Q&A. Branch-directory analysis is restricted to records where `PhysicalBranch = 1`.
+The key relationships are between a branch and its annual circulation, visit, workstation-use and card-registration records; the events hosted by a branch; the neighbourhood and ward in which it is located; and the services and facilities it provides. These connections support branch-level exploration, comparisons between branches, service-reach analysis and relationship-based Q&A. 
 
-## How it uses Relate
+## Tech Stack
+- Python
+- FastAPI
+- Jinja2
+- CSS
+- Relate
+- Vercel
 
+### How it uses Relate
 - **Mode:** Single file. LibraryTO uses a persistent Relate database at `data/tpl_library_graph.rl` and opens it in-process through the `relate-db` Python package (`import relate`).
 - **Why this mode:** A single persistent file gives the application one graph store to query and gives judges a concrete artifact they can inspect directly. The web application opens graph connections in read-only mode, so its inspection and analytics requests do not modify the submitted store.
 - **What the graph models:**
