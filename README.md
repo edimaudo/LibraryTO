@@ -23,7 +23,7 @@ The key relationships are between a branch and its annual circulation, visit, wo
 
 ### How it uses Relate
 - **Mode:** Single file. LibraryTO uses a persistent Relate database at `data/tpl_library_graph.rl` and opens it in-process through the `relate-db` Python package (`import relate`).
-- **Why this mode:** A single persistent file gives the application one graph store to query and gives judges a concrete artifact they can inspect directly. The web application opens graph connections in read-only mode, so its inspection and analytics requests do not modify the submitted store.
+- **Why this mode:** A single persistent file gives the application one graph store to query. The web application opens graph connections in read-only mode, so its inspection and analytics requests do not modify the submitted store.
 - **What the graph models:**
   - **Branch records** from Branch General Information, with `PhysicalBranch = 1` identifying the physical-branch directory used for branch-level rankings and peer analysis.
   - **Annual activity records** for circulation, visits, workstation usage and card registrations.
