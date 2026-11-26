@@ -1,6 +1,6 @@
 # LibraryTO
 
-LibraryTO is a civic intelligence app designed to transform [Toronto Public Library (TPL)](https://tpl.ca/about-the-library/open-data/) open data into actionable operational insights.
+LibraryTO is a civic intelligence app designed to transform [Toronto Public Library (TPL) open data](https://tpl.ca/about-the-library/open-data/) into actionable operational insights.
 
 ## Key Features
 - Overview
